@@ -11,7 +11,7 @@ import getpass
 
 username = getpass.getuser()
 # setupFile_name = "userSetup.py"
-setupFile_name = "userSetup_test.py"
+setupFile_name = "userSetup.py"
 
 # =========================
 # CURRENT TOOL ROOT
