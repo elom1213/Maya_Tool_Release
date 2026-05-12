@@ -90,4 +90,4 @@ with open(user_setup_path, "w", encoding="utf-8") as f:
 print("========================================")
 print("userSetup.py created")
 print(user_setup_path)
-print("========================================")
+print("========================================\n")

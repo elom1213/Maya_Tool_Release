@@ -32,5 +32,5 @@ run_git(["git", "reset", "--hard", "origin/master"])
 run_git(["git", "clean", "-fd"])
 
 print("========================================")
-print("\nUpdate Complete")
+print("Update Complete")
 print("========================================\n")
