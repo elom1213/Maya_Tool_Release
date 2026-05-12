@@ -73,10 +73,42 @@ if TOOLS_ROOT not in sys.path:
 print("JUN Tools Loaded")
 '''
 
+def get_unique_filepath(filepath):
+
+    # 폴더 / 파일명 분리
+    directory = os.path.dirname(filepath)
+
+    filename = os.path.basename(filepath)
+
+    # 확장자 분리
+    name, ext = os.path.splitext(filename)
+
+    # 원본 파일이 없으면 그대로 반환
+    if not os.path.exists(filepath):
+        return filepath
+
+    # 001, 002...
+    index = 1
+
+    while True:
+
+        new_filename = f"{name}_{index:03d}{ext}"
+
+        new_filepath = os.path.join(
+            directory,
+            new_filename
+        )
+
+        if not os.path.exists(new_filepath):
+            return new_filepath
+
+        index += 1
 
 # =========================
 # WRITE FILE
 # =========================
+
+user_setup_path = get_unique_filepath(user_setup_path)
 
 with open(user_setup_path, "w", encoding="utf-8") as f:
     f.write(user_setup_code)
