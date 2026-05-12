@@ -19,11 +19,10 @@ setupFile_name = "userSetup.py"
 
 # setUp_app_dir.py 가 있는 폴더 경로
 TOOLS_ROOT = os.path.dirname(os.path.abspath(__file__))
-TOOLS_ROOT = os.path.join(TOOLS_ROOT, "/tools")
+TOOLS_ROOT = os.path.join(TOOLS_ROOT, "tools")
 
 # Maya 에서 경로 문제 줄이기 위해 / 로 통일
 TOOLS_ROOT = TOOLS_ROOT.replace("\\", "/")
-
 
 # =========================
 # MAYA SCRIPTS DIR
