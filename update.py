@@ -31,5 +31,6 @@ run_git(["git", "reset", "--hard", "origin/master"])
 # 추적 안 되는 파일 제거
 run_git(["git", "clean", "-fd"])
 
-
+print("========================================")
 print("\nUpdate Complete")
+print("========================================")
