@@ -33,7 +33,7 @@ ROOT = r"{root}"
 if ROOT not in sys.path:
     sys.path.append(ROOT)
 
-import tools.{tool_path} as {tool_path}
+import .{tool_path} as {tool_path}
 
 {tool_path}.run(True)
 '''.format(

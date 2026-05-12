@@ -31,7 +31,7 @@ ROOT = r"{root}"
 if ROOT not in sys.path:
     sys.path.append(ROOT)
 
-import tools.A00040_file_exporter as A00040_file_exporter
+import .A00040_file_exporter as A00040_file_exporter
 
 A00040_file_exporter.run(True)
 '''.format(
