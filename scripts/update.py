@@ -1,7 +1,9 @@
 import subprocess
 import os
 
-ROOT = os.path.dirname(__file__)
+# 이 스크립트는 repo 루트의 scripts/ 하위에 있다 → repo 루트는 한 단계 위.
+# git 명령은 항상 repo 루트(cwd=ROOT)에서 실행해야 clean -fd 등이 전체에 적용된다.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_git(cmd):

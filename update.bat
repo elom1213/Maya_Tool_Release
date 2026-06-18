@@ -4,7 +4,7 @@ cd /d %~dp0
 
 echo Updating Tools...
 
-py update.py
-py setup_app_dir.py
+py scripts\update.py
+py scripts\setup_app_dir.py
 
 pause

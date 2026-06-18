@@ -55,8 +55,8 @@ cd /d "%~dp0%REPO_DIR%"
 
 :run_setup
 echo.
-py update.py
-py setup_app_dir.py
+py scripts\update.py
+py scripts\setup_app_dir.py
 echo.
 echo ========================================
 echo Install / Update Complete
