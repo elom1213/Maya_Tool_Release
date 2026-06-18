@@ -1,0 +1,6 @@
+# Obsidian vault config (편집용, 배포 제외)
+.obsidian/
+
+# Python
+__pycache__/
+*.pyc
