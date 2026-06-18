@@ -4,3 +4,7 @@
 # Python
 __pycache__/
 *.pyc
+
+# PyInstaller build output (배포 제외 — 빌드 중간물/대용량. 100MB 초과로 푸시 거부됨)
+build/
+dist/
