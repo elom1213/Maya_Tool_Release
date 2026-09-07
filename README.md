@@ -93,6 +93,7 @@ GitHub 페이지 우측 상단 **`Code` ▸ `Download ZIP`** 로 받아 원하�
 | `A00190_FKIK_General_Tool` | 리깅 | FK ↔ IK 전환 |
 | `A00200_CSV_tool` | 페이셜 | ARKit 페이셜 CSV 임포트 |
 | `A00210_FileManager` | 파이프라인 | **(독립 실행)** 씬 파일 버전·작업 기록·브랜치(Lineage) 그래프 관리 + git 동기화 |
+| `A00290_BSTool` | 리깅 | blendShape 작업 툴 — Shape Editor 대체 · Base Shape · Mix Targets · Target Order · Bake Delete |
 
 > **`A00210_FileManager` 는 다른 툴과 사용법이 다릅니다.** Maya 안에서 도는 셸프 툴이 아니라
 > **독립 실행(standalone) PySide 앱**입니다. 드래그&드롭(3장) 대신 다음처럼 실행합니다.
