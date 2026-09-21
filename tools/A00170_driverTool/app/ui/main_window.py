@@ -5,20 +5,36 @@
 #
 # A00150_remapVal (Remap Value) + A00160_sphericalEye (Spherical Eye) 를
 # 하나의 창 + QTabWidget 으로 통합한다(A00110_animTool 패턴).
+# 여기에 AttachCrv(커브 어태치) / Stretch(거리 구동) / Seal(입술 지퍼) 탭을 더했다.
 # 두 탭의 위젯/핸들러는 접두사(rmp_ / sph_)로 분리하고, 로그/메뉴/푸터는 공유한다.
 # 핵심 로직은 app/core 에 그대로 위임한다. 모든 UI 문자열/로그는 영어.
 
 import maya.cmds as cmds
 
+from Framework.core.maya_undo import undo_chunk
 from Framework.qt.qt import *
 from Framework.qt.maya_window import maya_main_window
 from Framework.qt import JUN_mod_tsl_qt
+from Framework.qt import JUN_mod_filter_qt
+from Framework.qt.MOD_log_qt_v01 import JUN_mod_log_qt_v01
+from Framework.qt.MOD_menuBar_qt_v01 import JUN_mod_menuBar_qt_v01
 
 from tools.A00170_driverTool.app.config.version import VERSION, LAST_UPDATE
 from tools.A00170_driverTool.app.core import (
     MayaScene,
     run_build_slerp, run_build_wave,
     run_build_spherical, run_build_nodes,
+    run_attach_to_closest, run_attach_uniform, AIM_AXES, DRIVER_TYPES,
+    SURFACE_AXES, attach_target_kind,
+    run_build_loop_drivers, loop_parse_edges, loop_parse_vertices, loop_alive,
+    group_loop_edges, CURVE_DEGREES, LOOP_DEFAULT_PREFIX, LOOP_CONTROL_SCALE,
+    run_build_seal, run_remove_seal, run_seal_recapture_rest,
+    seal_rest_space_warnings,
+    seal_collect_drivers, seal_orient_u, seal_prepare_sides,
+    seal_pair_drivers, seal_set_name, SEAL_AXES, SEAL_DEFAULT_PREFIX,
+    SEAL_METRIC_PARAM, SEAL_METRIC_DISTANCE, seal_pair_cost,
+    run_build_stretch, FUNCTIONS, SIGMOID_FUNCTIONS, INFINITY_TYPES, DEFAULT_INFINITY,
+    DEFAULT_BASE, DEFAULT_THRESHOLD_MIN, DEFAULT_THRESHOLD_MAX,
 )
 
 
@@ -37,6 +53,12 @@ class MainWindow(QWidget):
         self.setWindowFlags(Qt.Window)
         self.resize(580, 780)
 
+        # AttachCrv > Edge Loop 탭이 저장해 둔 선택. 리스트 위젯으로 펼치지 않는다
+        # (루프 하나가 수십~수백 엣지라 창이 무거워진다) — 요약 라벨로만 보여 준다.
+        self.lp_edges = []
+        self.lp_loop_count = 0
+        self.lp_verts = []
+
         self.build_ui()
 
     # ================================================================
@@ -49,7 +71,7 @@ class MainWindow(QWidget):
         # -------------------------
         # 메뉴 바 (Help > About)
         # -------------------------
-        self.menu_bar = QMenuBar()
+        self.menu_bar = JUN_mod_menuBar_qt_v01(tool_file=__file__)
         help_menu = self.menu_bar.addMenu("Help")
         act_about = help_menu.addAction("About")
         act_about.triggered.connect(self.show_about)
@@ -60,8 +82,9 @@ class MainWindow(QWidget):
         # 탭 빌더가 생성 중(_sync_*) self._log() 를 호출할 수 있으므로 탭보다 먼저 생성한다.
         # (레이아웃 추가는 탭 아래에 한다)
         # -------------------------
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
+        self.log_view = JUN_mod_log_qt_v01(
+            window_title="Driver Tool - Log",
+            object_name="JUN_A00170_driverTool_log_window")
         self.log_view.setFixedHeight(120)
 
         # -------------------------
@@ -70,6 +93,13 @@ class MainWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_remap_tab(), "Remap Value")
         self.tabs.addTab(self._build_spherical_tab(), "Spherical Eye")
+        self.tabs.addTab(self._build_attach_tab(), "AttachCrv")
+        self.tabs.addTab(self._build_stretch_tab(), "Stretch")
+        index = self.tabs.addTab(self._build_seal_tab(), "Seal")
+        self.tabs.setTabToolTip(
+            index,
+            "Lip zip: close the lips from a corner toward the centre, with the "
+            "two directions driven independently.")
         main_layout.addWidget(self.tabs)
 
         # 로그창을 탭 아래에 배치
@@ -179,15 +209,18 @@ class MainWindow(QWidget):
         group_layout.addWidget(self.rmp_attr_tsl)
         root.addWidget(group, stretch=1)
 
-        # Attr Search
+        # Attr Filter — 공용 위젯. 입력 즉시 일치하는 어트리뷰트만 남는다.
         row = QHBoxLayout()
-        row.addWidget(QLabel("Attr Search"))
-        self.rmp_le_attr_search = QLineEdit()
-        self.rmp_le_attr_search.setPlaceholderText("token (e.g. rotate)")
-        row.addWidget(self.rmp_le_attr_search)
-        self.rmp_btn_attr_search = QPushButton("Search")
-        self.rmp_btn_attr_search.setFixedWidth(70)
-        row.addWidget(self.rmp_btn_attr_search)
+        self.rmp_flt_attr = JUN_mod_filter_qt.JUN_mod_filter_qt_v01(
+            self.rmp_attr_tsl.list_widget,
+            placeholder="Type any part of an attribute name (e.g. rotate)")
+        row.addWidget(self.rmp_flt_attr, 1)
+        self.rmp_btn_attr_reveal = QPushButton("Reveal")
+        self.rmp_btn_attr_reveal.setFixedWidth(70)
+        self.rmp_btn_attr_reveal.setToolTip(
+            "Re-query the first joint by the filter text to reveal attributes that\n"
+            "are not currently listed (e.g. 'worldMatrix'), then list those instead.")
+        row.addWidget(self.rmp_btn_attr_reveal)
         root.addLayout(row)
 
         # Build buttons : Slerp Ramp / Sine Wave
@@ -207,8 +240,7 @@ class MainWindow(QWidget):
 
         # Signals
         self.rmp_btn_get_controller.clicked.connect(self.on_rmp_get_controller)
-        self.rmp_btn_attr_search.clicked.connect(self.on_rmp_search_attrs)
-        self.rmp_le_attr_search.returnPressed.connect(self.on_rmp_search_attrs)
+        self.rmp_btn_attr_reveal.clicked.connect(self.on_rmp_reveal_attrs)
         self.rmp_btn_build.clicked.connect(self.on_rmp_build)
         self.rmp_btn_build_wave.clicked.connect(self.on_rmp_build_wave)
 
@@ -244,7 +276,11 @@ class MainWindow(QWidget):
         self.rmp_le_controller.setText(selection[0])
 
     def on_rmp_list_attributes(self):
-        """joints 리스트 첫 오브젝트의 keyable 어트리뷰트를 Attributes 리스트에 채운다."""
+        """joints 리스트 첫 오브젝트의 어트리뷰트(전체)를 Attributes 리스트에 채운다.
+
+        keyable 만이 아니라 listAttr(obj) 전체 + multi/compound 자식까지 펼쳐 보여준다
+        (A00145_RigConnect Connect 탭 List Attributes 와 동일).
+        """
         joints = self.rmp_joints_tsl.get_all_items()
         if not joints:
             self._log("[WARN] Joints list is empty. Add joints first.")
@@ -253,26 +289,75 @@ class MainWindow(QWidget):
         if not MayaScene.exists(first):
             self._log("[WARN] Object not found in scene: {0}".format(first))
             return
-        attrs = MayaScene.list_keyable_attrs(first)
+        attrs = MayaScene.list_attrs(first)
         self.rmp_attr_tsl.set_items(attrs)
-        self._log("Listed {0} keyable attribute(s) from {1}.".format(len(attrs), first))
+        self._log(self._relist_msg(self.rmp_flt_attr, len(attrs), first))
 
-    def on_rmp_search_attrs(self):
-        """토큰을 포함하는 어트리뷰트를 Attributes 리스트에서 선택."""
-        token = self.rmp_le_attr_search.text().strip()
+    def _relist_msg(self, flt, total, obj):
+        """목록을 새로 채운 뒤 필터를 다시 먹이고, 로그 문구를 만든다."""
+        shown, _total = flt.refresh()
+        msg = "Listed {0} attribute(s) from {1}.".format(total, obj)
+        if shown != total:
+            msg += " Filter '{0}' shows {1}.".format(flt.text().strip(), shown)
+        return msg
+
+    def on_rmp_reveal_attrs(self):
+        """Filter 문구로 첫 조인트를 **재질의**해, 목록에 없던 어트리뷰트를 드러낸다.
+
+        Filter 는 이미 채워진 목록만 거르므로 애초에 리스트업되지 않은 어트리뷰트
+        (예: 'worldMatrix')는 찾을 수 없다. 그 경우에만 쓰는 보조 버튼이다.
+        예전 Search 버튼의 "일치 없으면 재질의" 동작을 명시적인 버튼으로 분리한 것.
+        """
+        self._reveal_attrs(self.rmp_joints_tsl, self.rmp_attr_tsl,
+                           self.rmp_flt_attr, "Joints")
+
+    def _reveal_attrs(self, objs_tsl, attr_tsl, flt, obj_label):
+        token = flt.text().strip()
         if not token:
-            self._log("[WARN] Enter a search token.")
+            self._log("[WARN] Enter a filter token first.")
             return
-        matches = [a for a in self.rmp_attr_tsl.get_all_items() if token in a]
-        self.rmp_attr_tsl.select_by_texts(matches)
-        self._log("Search '{0}' : {1} attribute(s) selected.".format(token, len(matches)))
+
+        objs = objs_tsl.get_all_items()
+        if not objs:
+            self._log("[WARN] {0} list is empty. Add objects first.".format(obj_label))
+            return
+        first = objs[0]
+        if not MayaScene.exists(first):
+            self._log("[WARN] Object not found in scene: {0}".format(first))
+            return
+        try:
+            attrs = MayaScene.list_attrs(first, token)
+        except Exception as exc:
+            self._log("[WARN] No attribute matches '{0}': {1}".format(token, exc))
+            return
+        if not attrs:
+            self._log("Reveal '{0}' : no attribute found.".format(token))
+            return
+
+        attr_tsl.set_items(attrs)
+        # 드러낸 것을 곧바로 가리지 않도록 필터를 비운 뒤 다시 먹인다.
+        flt.clear()
+        self._log("Reveal '{0}' : re-listed {1} attribute(s) from {2}.".format(
+            token, len(attrs), first))
+
+    def _visible_selected_attrs(self, flt, label):
+        """**보이면서 선택된** 어트리뷰트. 가려진 선택이 있으면 알린다.
+
+        Qt 는 항목을 숨겨도 선택을 유지하므로, 필터에 가려진 어트리뷰트까지
+        빌드에 들어가지 않도록 여기서 걸러 낸다.
+        """
+        names, hidden = flt.visible_selected()
+        if hidden:
+            self._log("[INFO] {0} : {1} selected attribute(s) hidden by the filter "
+                      "were skipped.".format(label, hidden))
+        return names
 
     def _rmp_collect_inputs(self):
         """공통 입력 수집 + 검증. 유효하면 (prefix, controller, joints, attrs), 아니면 None."""
         prefix = self.rmp_le_prefix.text().strip()
         controller = self.rmp_le_controller.text().strip()
         joints = self.rmp_joints_tsl.get_all_items()
-        attrs = self.rmp_attr_tsl.selected_items()
+        attrs = self._visible_selected_attrs(self.rmp_flt_attr, "Attributes")
 
         if not prefix:
             self._log("[WARN] Prefix is empty.")
@@ -306,18 +391,16 @@ class MainWindow(QWidget):
         interp = interp_index + 1
         interp_name = ["Linear", "Smooth", "Spline"][interp_index]
 
-        cmds.undoInfo(openChunk=True)
-        try:
-            master = run_build_slerp(prefix, controller, joints, attrs, output_min, output_max, interp)
-            self._log(
-                "Built: {master} | {n} joint(s) | interp: {interp} | attrs: {attrs}".format(
-                    master=master, n=len(joints), interp=interp_name, attrs=", ".join(attrs)
+        with undo_chunk():
+            try:
+                master = run_build_slerp(prefix, controller, joints, attrs, output_min, output_max, interp)
+                self._log(
+                    "Built: {master} | {n} joint(s) | interp: {interp} | attrs: {attrs}".format(
+                        master=master, n=len(joints), interp=interp_name, attrs=", ".join(attrs)
+                    )
                 )
-            )
-        except Exception as exc:
-            self._log("[ERROR] Build failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+            except Exception as exc:
+                self._log("[ERROR] Build failed: {0}".format(exc))
 
     def on_rmp_build_wave(self):
         """Sine Wave 모드 빌드: 오브젝트마다 plusMinusAverage->animCurve->remapValue 체인 생성."""
@@ -336,23 +419,21 @@ class MainWindow(QWidget):
         output_min = self.rmp_dsb_output_min.value()
         output_max = self.rmp_dsb_output_max.value()
 
-        cmds.undoInfo(openChunk=True)
-        try:
-            driver = run_build_wave(
-                prefix, controller, joints, driver_attr, attrs,
-                input_min, input_max, output_min, output_max)
-            self._log(
-                "Built sine wave: driver {driver} | {n} object(s) | "
-                "range in[{imin},{imax}] out[{omin},{omax}] | attrs: {attrs}".format(
-                    driver=driver, n=len(joints),
-                    imin=input_min, imax=input_max, omin=output_min, omax=output_max,
-                    attrs=", ".join(attrs)
+        with undo_chunk():
+            try:
+                driver = run_build_wave(
+                    prefix, controller, joints, driver_attr, attrs,
+                    input_min, input_max, output_min, output_max)
+                self._log(
+                    "Built sine wave: driver {driver} | {n} object(s) | "
+                    "range in[{imin},{imax}] out[{omin},{omax}] | attrs: {attrs}".format(
+                        driver=driver, n=len(joints),
+                        imin=input_min, imax=input_max, omin=output_min, omax=output_max,
+                        attrs=", ".join(attrs)
+                    )
                 )
-            )
-        except Exception as exc:
-            self._log("[ERROR] Build failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+            except Exception as exc:
+                self._log("[ERROR] Build failed: {0}".format(exc))
 
     # ================================================================
     # Tab : Spherical Eye  (A00160_sphericalEye 이식)
@@ -516,18 +597,16 @@ class MainWindow(QWidget):
             return
         prefix, controller, joints, driver_attr, radius = collected
 
-        cmds.undoInfo(openChunk=True)
-        try:
-            driver = run_build_spherical(prefix, controller, joints, driver_attr, radius)
-            self._log(
-                "Built (baked): driver {driver} | {n} joint(s) | radius {r}".format(
-                    driver=driver, n=len(joints), r=radius
+        with undo_chunk():
+            try:
+                driver = run_build_spherical(prefix, controller, joints, driver_attr, radius)
+                self._log(
+                    "Built (baked): driver {driver} | {n} joint(s) | radius {r}".format(
+                        driver=driver, n=len(joints), r=radius
+                    )
                 )
-            )
-        except Exception as exc:
-            self._log("[ERROR] Build failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+            except Exception as exc:
+                self._log("[ERROR] Build failed: {0}".format(exc))
 
     def on_sph_build_nodes(self):
         """Converge 모드: dilate 0->90 동안 전 조인트를 center(마지막) 조인트 위치로 수렴."""
@@ -540,30 +619,1417 @@ class MainWindow(QWidget):
             self._log("[WARN] Need at least 2 joints (front .. center) to converge.")
             return
 
-        cmds.undoInfo(openChunk=True)
-        try:
-            driver, skipped = run_build_nodes(prefix, controller, joints, driver_attr, radius)
-            self._log(
-                "Built (converge): driver {driver} | {n} joint(s) | +center '{c}' / "
-                "-front '{f}' | sphere radius {r}".format(
-                    driver=driver, n=len(joints), c=joints[-1], f=joints[0], r=radius
-                )
-            )
-            if skipped:
+        with undo_chunk():
+            try:
+                driver, skipped = run_build_nodes(prefix, controller, joints, driver_attr, radius)
                 self._log(
-                    "[WARN] scale NOT driven for {n} joint(s) (radius {r} <= rest distance "
-                    "from center): {names}".format(
-                        n=len(skipped), r=radius, names=", ".join(skipped)
+                    "Built (converge): driver {driver} | {n} joint(s) | +center '{c}' / "
+                    "-front '{f}' | sphere radius {r}".format(
+                        driver=driver, n=len(joints), c=joints[-1], f=joints[0], r=radius
                     )
                 )
+                if skipped:
+                    self._log(
+                        "[WARN] scale NOT driven for {n} joint(s) (radius {r} <= rest distance "
+                        "from center): {names}".format(
+                            n=len(skipped), r=radius, names=", ".join(skipped)
+                        )
+                    )
+            except Exception as exc:
+                self._log("[ERROR] Build failed: {0}".format(exc))
+
+    # ================================================================
+    # Tab : AttachCrv  (ref/ref_01.mel attachDriverOnCurve 이식 + 동작 변경)
+    # ================================================================
+
+    def _build_attach_tab(self):
+        """AttachCrv 는 하위 탭 2개다.
+
+        - Default   : 기존 기능 그대로(커브를 지정해 오브젝트를 최근접 지점에 어태치 /
+                      균일 분배). 아래 `_build_attach_default_page`.
+        - Edge Loop : 엣지 루프 -> 커브 -> 버텍스 자리 널 -> 어태치(+조인트)를 한 번에.
+        """
+        tabs = QTabWidget()
+        tabs.addTab(self._build_attach_default_page(), "Default")
+        index = tabs.addTab(self._build_attach_loop_page(), "Edge Loop")
+        tabs.setTabToolTip(
+            index,
+            "Build curves from stored edge loops, put a null at each stored "
+            "vertex, attach the nulls to the nearest curve, and optionally "
+            "create joints that follow the nulls.")
+        self.atc_tabs = tabs
+        return tabs
+
+    def _build_attach_default_page(self):
+        """TSL 에 나열된 오브젝트들을 커브에서 '가장 가까운 지점'에 라이브 어태치한다.
+
+        ref 는 커브에 일정 간격으로 새 로케이터를 어태치했지만, 여기서는 기존
+        오브젝트들을 각자 최근접 파라미터 지점에 붙인다(커브 변형을 따라감).
+        """
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        # Attachment Curve (v01.23~ : NURBS surface 도 받는다 — matrixPinning 이식)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Attachment Curve / Surface"))
+        self.atc_le_curve = QLineEdit()
+        self.atc_le_curve.setPlaceholderText("NURBS curve or NURBS surface")
+        self.atc_le_curve.setToolTip(
+            "NURBS curve: attach with pointOnCurveInfo.\n"
+            "NURBS surface: attach with pointOnSurfaceInfo at the closest (u, v) "
+            "(matrix pinning, like a follicle but without flipping).")
+        row.addWidget(self.atc_le_curve)
+        self.atc_btn_get_curve = QPushButton("Get")
+        self.atc_btn_get_curve.setFixedWidth(70)
+        row.addWidget(self.atc_btn_get_curve)
+        root.addLayout(row)
+
+        # Objects (커브에 붙일 기존 오브젝트들)
+        group = QGroupBox("Objects (attach to closest point)")
+        group_layout = QVBoxLayout(group)
+        self.atc_objs_tsl = JUN_mod_tsl_qt.JUN_mod_tsl_qt_v01(title="Objects")
+        group_layout.addWidget(self.atc_objs_tsl)
+        root.addWidget(group, stretch=1)
+
+        # Options : Orient to tangent + Aim Axis
+        row = QHBoxLayout()
+        self.atc_cb_orient = QCheckBox("Orient to tangent")
+        self.atc_cb_orient.setChecked(True)
+        self.atc_cb_orient.setToolTip(
+            "On: aim the chosen local axis along the curve tangent and drive "
+            "the object's rotate as well as translate. Off: drive translate "
+            "only (keeps each object's current rotation). Turn off for vertical "
+            "curves where the tangent is parallel to world up.\n"
+            "Surface: X follows tangent U, Y the surface normal, Z = X cross Y "
+            "(right-handed, opposite tangent V).")
+        row.addWidget(self.atc_cb_orient)
+        row.addWidget(QLabel("Aim Axis"))
+        self.atc_cb_aim = QComboBox()
+        self.atc_cb_aim.addItems(list(AIM_AXES))
+        self.atc_cb_aim.setToolTip(
+            "Which local axis of each object aims along the curve tangent "
+            "(surface: tangent U).")
+        row.addWidget(self.atc_cb_aim)
+        row.addStretch(1)
+        root.addLayout(row)
+
+        # Normal curve (norCrv) : ref-faithful up-vector source.
+        row = QHBoxLayout()
+        self.atc_cb_norcrv = QCheckBox("Create Normal Curve (norCrv)")
+        self.atc_cb_norcrv.setChecked(True)
+        self.atc_cb_norcrv.setToolTip(
+            "On (default, like the original ref tool): create one straight "
+            "'norCrv' curve parented under the attachment curve and drive each "
+            "object's up (Y) / side (Z) from it. Rotate or reshape the norCrv "
+            "to control the up direction and twist of the whole chain.\n"
+            "Off: use the self-contained world-up frame computed from the curve "
+            "tangent (no extra curve created).\n"
+            "Curves only: a surface uses its own normal as the up vector.")
+        row.addWidget(self.atc_cb_norcrv)
+        row.addWidget(QLabel("norCrv Length"))
+        self.atc_dsb_norcrv_len = QDoubleSpinBox()
+        self.atc_dsb_norcrv_len.setRange(0.001, 100000.0)
+        self.atc_dsb_norcrv_len.setDecimals(3)
+        self.atc_dsb_norcrv_len.setSingleStep(0.1)
+        self.atc_dsb_norcrv_len.setValue(1.0)
+        self.atc_dsb_norcrv_len.setFixedWidth(90)
+        self.atc_dsb_norcrv_len.setToolTip(
+            "Length of the generated norCrv (visual size of the up reference).")
+        row.addWidget(self.atc_dsb_norcrv_len)
+        row.addStretch(1)
+        root.addLayout(row)
+
+        # Collect the created pointOnCurveInfo / pointOnSurfaceInfo nodes into one objectSet.
+        self.atc_cb_make_set = QCheckBox(
+            "Group point info nodes into a set")
+        self.atc_cb_make_set.setChecked(True)
+        self.atc_cb_make_set.setToolTip(
+            "Create one objectSet containing every pointOnCurveInfo "
+            "('<curve>_atcPOCI_SET') or pointOnSurfaceInfo ('<surface>_atcPOSI_SET') "
+            "node made by this build, for easy selection later.")
+        root.addWidget(self.atc_cb_make_set)
+
+        # Maintain offset : 오브젝트를 커브 위로 옮기지 않고 지금 자리에서 커브를 따라가게.
+        self.atc_cb_maintain_offset = QCheckBox("Maintain offset")
+        self.atc_cb_maintain_offset.setChecked(True)
+        self.atc_cb_maintain_offset.setToolTip(
+            "On: every listed object keeps its current position, rotation and "
+            "scale (and its translate / rotate / scale channel values). The "
+            "network drives offsetParentMatrix instead, so the object only "
+            "follows how the curve moves from now on.\n"
+            "Off: snap translate (and rotate, with Orient) onto the closest "
+            "point of the curve.\n"
+            "Applies to Attach to Closest Point only.")
+        root.addWidget(self.atc_cb_maintain_offset)
+
+        # Build : Attach the listed objects to their closest point.
+        self.atc_btn_build = QPushButton("Attach to Closest Point")
+        self.atc_btn_build.setMinimumHeight(34)
+        self.atc_btn_build.setToolTip(
+            "For each listed object: find the closest parameter on the curve "
+            "(or closest u, v on the surface), then drive it there with a "
+            "pointOnCurveInfo / pointOnSurfaceInfo -> matrix network "
+            "(parent-safe, live as the curve / surface deforms).")
+        root.addWidget(self.atc_btn_build)
+
+        # Distribute : create N new drivers uniformly along the curve
+        # (ref attachDriverOnCurve original behaviour). Shares the orient / Aim
+        # Axis / norCrv / set options above.
+        dist_group = QGroupBox("Distribute new drivers uniformly")
+        dist_layout = QVBoxLayout(dist_group)
+
+        dist_row = QHBoxLayout()
+        dist_row.addWidget(QLabel("Count"))
+        self.atc_sb_count = QSpinBox()
+        self.atc_sb_count.setRange(1, 1000)
+        self.atc_sb_count.setValue(5)
+        self.atc_sb_count.setFixedWidth(70)
+        self.atc_sb_count.setToolTip(
+            "How many new drivers to create and spread evenly along the curve.")
+        dist_row.addWidget(self.atc_sb_count)
+        dist_row.addWidget(QLabel("Driver Type"))
+        self.atc_cb_drvtype = QComboBox()
+        self.atc_cb_drvtype.addItems(["Locator", "Null"])
+        self.atc_cb_drvtype.setToolTip(
+            "Locator: spaceLocator drivers (visible). Null: empty groups.")
+        dist_row.addWidget(self.atc_cb_drvtype)
+        dist_row.addWidget(QLabel("Surface Axis"))
+        self.atc_cb_surface_axis = QComboBox()
+        self.atc_cb_surface_axis.addItems(list(SURFACE_AXES))
+        self.atc_cb_surface_axis.setToolTip(
+            "Surfaces only: spread the drivers evenly along U or V. The other "
+            "direction stays at the middle of its parameter range.")
+        dist_row.addWidget(self.atc_cb_surface_axis)
+        dist_row.addStretch(1)
+        dist_layout.addLayout(dist_row)
+
+        self.atc_cb_fullrange = QCheckBox("Distribute across full range (open curve)")
+        self.atc_cb_fullrange.setChecked(True)
+        self.atc_cb_fullrange.setToolTip(
+            "On (open curves): the first and last drivers land exactly on the "
+            "curve ends (parameter min and max).\n"
+            "Off (periodic/closed curves): the last driver stops just before the "
+            "end so it does not overlap the first at the seam.\n"
+            "Surfaces: the same rule along the chosen Surface Axis.")
+        dist_layout.addWidget(self.atc_cb_fullrange)
+
+        self.atc_btn_distribute = QPushButton("Distribute Drivers on Curve")
+        self.atc_btn_distribute.setMinimumHeight(34)
+        self.atc_btn_distribute.setToolTip(
+            "Create Count new drivers and attach them at evenly spaced "
+            "parameters from the curve start to its end (pointOnCurveInfo -> "
+            "matrix network, live as the curve deforms).")
+        dist_layout.addWidget(self.atc_btn_distribute)
+        root.addWidget(dist_group)
+
+        # Signals
+        self.atc_btn_get_curve.clicked.connect(self.on_atc_get_curve)
+        self.atc_btn_build.clicked.connect(self.on_atc_build)
+        self.atc_btn_distribute.clicked.connect(self.on_atc_distribute)
+        self.atc_cb_orient.toggled.connect(self._atc_sync_orient_enabled)
+        self.atc_cb_norcrv.toggled.connect(self._atc_sync_orient_enabled)
+        self.atc_le_curve.textChanged.connect(self._atc_sync_orient_enabled)
+        self._atc_sync_orient_enabled()
+
+        return tab
+
+    def _atc_sync_orient_enabled(self, *args):
+        """Orient/norCrv 토글과 대상 종류(커브/서피스)에 따라 종속 위젯 활성 상태를 동기화한다.
+
+        norCrv 는 커브 전용, Surface Axis 는 서피스 전용이다. 대상이 비었거나 아직 판별이
+        안 되면(타이핑 중) 커브로 보고 커브 옵션을 열어 둔다.
+        """
+        try:
+            surface = attach_target_kind(self.atc_le_curve.text().strip()) == "surface"
+        except Exception:                                  # noqa: BLE001
+            surface = False
+        orient = self.atc_cb_orient.isChecked()
+        self.atc_cb_aim.setEnabled(orient)
+        self.atc_cb_norcrv.setEnabled(orient and not surface)
+        self.atc_dsb_norcrv_len.setEnabled(
+            orient and not surface and self.atc_cb_norcrv.isChecked())
+        self.atc_cb_surface_axis.setEnabled(surface)
+
+    @staticmethod
+    def _atc_param_text(param):
+        """로그용 파라미터 문자열 — 커브는 값 하나, 서피스는 (u, v)."""
+        if isinstance(param, (tuple, list)):
+            return "(u {0:.4f}, v {1:.4f})".format(param[0], param[1])
+        return "param {0:.4f}".format(param)
+
+    # ----------------------------------------------------------------
+    # AttachCrv > Edge Loop : 루프 -> 커브 -> 널 -> 어태치 (+ 조인트)
+    # ----------------------------------------------------------------
+
+    def _build_attach_loop_page(self):
+        """저장한 엣지 루프와 버텍스로 드라이버 셋업을 한 번에 만든다.
+
+        엣지/버텍스는 **리스트 위젯으로 펼치지 않는다** — 루프 하나가 수십~수백 개라
+        리스트가 창을 무겁게 만든다. 요약 라벨 + Select / Clear 로 다룬다.
+        """
+        page = QWidget()
+        root = QVBoxLayout(page)
+
+        desc = QLabel(
+            "Store the edge loop(s) and the vertices, then press Build:\n"
+            "loops -> curves, a null at each vertex, nulls attached to the "
+            "nearest curve (+ joints).")
+        desc.setAlignment(Qt.AlignCenter)
+        root.addWidget(desc)
+
+        # ---- 저장 : 엣지 루프
+        store = QGroupBox("Stored selection")
+        store_layout = QVBoxLayout(store)
+
+        self.lp_lbl_edges = QLabel("Edge loops: none")
+        self.lp_lbl_edges.setToolTip(
+            "Edges are kept as component names, not as a list widget - one loop "
+            "is easily hundreds of edges.")
+        store_layout.addWidget(self.lp_lbl_edges)
+
+        edge_row = QHBoxLayout()
+        btn_store_edges = QPushButton("Store Edge Loops from Selection")
+        btn_store_edges.setToolTip(
+            "Store the selected mesh edges. Several separate loops at once are "
+            "fine - each connected group becomes its own curve.")
+        btn_store_edges.clicked.connect(self.on_lp_store_edges)
+        edge_row.addWidget(btn_store_edges)
+        btn_sel_edges = QPushButton("Select")
+        btn_sel_edges.clicked.connect(self.on_lp_select_edges)
+        edge_row.addWidget(btn_sel_edges)
+        btn_clr_edges = QPushButton("Clear")
+        btn_clr_edges.clicked.connect(self.on_lp_clear_edges)
+        edge_row.addWidget(btn_clr_edges)
+        store_layout.addLayout(edge_row)
+
+        # ---- 저장 : 버텍스
+        self.lp_lbl_verts = QLabel("Vertices: none")
+        self.lp_lbl_verts.setToolTip(
+            "One null (and optionally one joint) is created per stored vertex.")
+        store_layout.addWidget(self.lp_lbl_verts)
+
+        vert_row = QHBoxLayout()
+        btn_store_verts = QPushButton("Store Vertices from Selection")
+        btn_store_verts.setToolTip(
+            "Store the vertices where the drivers should sit (edges/faces are "
+            "converted to vertices).")
+        btn_store_verts.clicked.connect(self.on_lp_store_verts)
+        vert_row.addWidget(btn_store_verts)
+        btn_sel_verts = QPushButton("Select")
+        btn_sel_verts.clicked.connect(self.on_lp_select_verts)
+        vert_row.addWidget(btn_sel_verts)
+        btn_clr_verts = QPushButton("Clear")
+        btn_clr_verts.clicked.connect(self.on_lp_clear_verts)
+        vert_row.addWidget(btn_clr_verts)
+        store_layout.addLayout(vert_row)
+        root.addWidget(store)
+
+        # ---- 커브 옵션
+        curve_group = QGroupBox("Curve")
+        curve_layout = QVBoxLayout(curve_group)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Name Prefix"))
+        self.lp_le_prefix = QLineEdit(LOOP_DEFAULT_PREFIX)
+        self.lp_le_prefix.setToolTip(
+            "Names everything this build makes: <prefix>_crv_01 / _null_01 / "
+            "_jnt_01, plus the _null_grp and _jnt_grp groups.")
+        name_row.addWidget(self.lp_le_prefix)
+        name_row.addWidget(QLabel("Degree"))
+        self.lp_cb_degree = QComboBox()
+        self.lp_cb_degree.addItems(["1 (polyline)", "3 (smooth)"])
+        self.lp_cb_degree.setToolTip(
+            "1: the curve follows the edges exactly.\n"
+            "3: a smooth curve through the loop.")
+        name_row.addWidget(self.lp_cb_degree)
+        curve_layout.addLayout(name_row)
+
+        hint = QLabel(
+            "One curve per connected edge group (polyToCurve, history kept so "
+            "the curve follows the mesh).")
+        hint.setWordWrap(True)
+        curve_layout.addWidget(hint)
+        root.addWidget(curve_group)
+
+        # ---- 어태치 옵션 (Default 탭과 같은 의미. 이 탭 전용 위젯이다)
+        attach_group = QGroupBox("Attach")
+        attach_layout = QVBoxLayout(attach_group)
+
+        row = QHBoxLayout()
+        self.lp_cb_orient = QCheckBox("Orient to curve tangent")
+        self.lp_cb_orient.setChecked(True)
+        self.lp_cb_orient.setToolTip(
+            "On: aim the chosen local axis along the curve tangent and drive "
+            "rotate as well as translate. Off: translate only.")
+        row.addWidget(self.lp_cb_orient)
+        row.addWidget(QLabel("Aim Axis"))
+        self.lp_cb_aim = QComboBox()
+        self.lp_cb_aim.addItems(list(AIM_AXES))
+        row.addWidget(self.lp_cb_aim)
+        row.addStretch(1)
+        attach_layout.addLayout(row)
+
+        row = QHBoxLayout()
+        self.lp_cb_norcrv = QCheckBox("Create Normal Curve (norCrv)")
+        self.lp_cb_norcrv.setChecked(True)
+        self.lp_cb_norcrv.setToolTip(
+            "Create one straight 'norCrv' under each attachment curve and take "
+            "the up (Y) / side (Z) from it - rotate it to control the twist of "
+            "the whole chain.")
+        row.addWidget(self.lp_cb_norcrv)
+        row.addWidget(QLabel("norCrv Length"))
+        self.lp_dsb_norcrv_len = QDoubleSpinBox()
+        self.lp_dsb_norcrv_len.setRange(0.001, 100000.0)
+        self.lp_dsb_norcrv_len.setDecimals(3)
+        self.lp_dsb_norcrv_len.setSingleStep(0.1)
+        self.lp_dsb_norcrv_len.setValue(1.0)
+        self.lp_dsb_norcrv_len.setFixedWidth(90)
+        self.lp_dsb_norcrv_len.setKeyboardTracking(False)
+        row.addWidget(self.lp_dsb_norcrv_len)
+        row.addStretch(1)
+        attach_layout.addLayout(row)
+
+        self.lp_cb_make_set = QCheckBox("Group pointOnCurveInfo nodes into a set")
+        self.lp_cb_make_set.setChecked(True)
+        attach_layout.addWidget(self.lp_cb_make_set)
+        root.addWidget(attach_group)
+
+        # ---- 컨트롤러 계층 옵션 (기본 체크)
+        ctl_group = QGroupBox("Controllers")
+        ctl_layout = QVBoxLayout(ctl_group)
+
+        self.lp_cb_controls = QCheckBox(
+            "Insert a controller under each null (null > con > ctl > tgt)")
+        self.lp_cb_controls.setChecked(True)
+        self.lp_cb_controls.setToolTip(
+            "On (default): build this hierarchy under every null and let the "
+            "TGT drive the joint,\n"
+            "so moving the controller offsets the joint on top of what the "
+            "curve gives it.\n\n"
+            "    <prefix>_null_01\n"
+            "    +-- <prefix>_null_01_con      (zero-out null group)\n"
+            "        +-- <prefix>_null_01_ctl  (sphere curve controller)\n"
+            "            +-- <prefix>_null_01_tgt  (constrains the joint)\n\n"
+            "Off: the null constrains the joint directly.\n"
+            "The controller is drawn slightly larger than the joint "
+            "(Joint Radius x {0}).".format(LOOP_CONTROL_SCALE))
+        ctl_layout.addWidget(self.lp_cb_controls)
+        root.addWidget(ctl_group)
+
+        # ---- 조인트 옵션 (기본 체크)
+        joint_group = QGroupBox("Joints")
+        joint_layout = QVBoxLayout(joint_group)
+
+        self.lp_cb_joints = QCheckBox("Create joints that follow the nulls")
+        self.lp_cb_joints.setChecked(True)
+        self.lp_cb_joints.setToolTip(
+            "On (default): after attaching, create one joint at each null and "
+            "parentConstrain it to that null, so the joints ride the curve.\n"
+            "The joints go under <prefix>_jnt_grp - a hierarchy of their own, "
+            "so they can be bound and exported independently.")
+        joint_layout.addWidget(self.lp_cb_joints)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Joint Radius"))
+        self.lp_dsb_joint_radius = QDoubleSpinBox()
+        self.lp_dsb_joint_radius.setToolTip(
+            "Sets the joint's .radius attribute to exactly this value.\n"
+            "The size drawn in the viewport is this value multiplied by Maya's "
+            "global joint size\n(Display > Animation > Joint Size), so it can "
+            "look different - the attribute is what you typed.\n"
+            "It also sizes the controller (x {0}).".format(LOOP_CONTROL_SCALE))
+        self.lp_dsb_joint_radius.setRange(0.001, 10000.0)
+        self.lp_dsb_joint_radius.setDecimals(3)
+        self.lp_dsb_joint_radius.setSingleStep(0.1)
+        self.lp_dsb_joint_radius.setValue(1.0)
+        self.lp_dsb_joint_radius.setFixedWidth(90)
+        self.lp_dsb_joint_radius.setKeyboardTracking(False)
+        row.addWidget(self.lp_dsb_joint_radius)
+        row.addStretch(1)
+        joint_layout.addLayout(row)
+        root.addWidget(joint_group)
+
+        self.lp_btn_build = QPushButton("Build Curve + Nulls (+ Joints)")
+        self.lp_btn_build.setMinimumHeight(34)
+        self.lp_btn_build.setToolTip(
+            "Curves from the stored edge loops, a null at each stored vertex, "
+            "each null attached to its nearest curve, and (if checked) a joint "
+            "per null. All of it is one undo step.")
+        self.lp_btn_build.clicked.connect(self.on_lp_build)
+        root.addWidget(self.lp_btn_build)
+
+        root.addStretch(1)
+
+        self.lp_cb_orient.toggled.connect(self._lp_sync_enabled)
+        self.lp_cb_norcrv.toggled.connect(self._lp_sync_enabled)
+        self.lp_cb_joints.toggled.connect(self._lp_sync_enabled)
+        self.lp_cb_controls.toggled.connect(self._lp_sync_enabled)
+        self._lp_sync_enabled()
+        self._lp_update_labels()
+        return page
+
+    # ---- Edge Loop : 상태/헬퍼
+
+    def _lp_sync_enabled(self, *args):
+        orient = self.lp_cb_orient.isChecked()
+        self.lp_cb_aim.setEnabled(orient)
+        self.lp_cb_norcrv.setEnabled(orient)
+        self.lp_dsb_norcrv_len.setEnabled(orient and self.lp_cb_norcrv.isChecked())
+        # 반경은 조인트 크기이자 컨트롤러 크기라, 둘 중 하나만 켜져도 쓴다.
+        self.lp_dsb_joint_radius.setEnabled(
+            self.lp_cb_joints.isChecked() or self.lp_cb_controls.isChecked())
+
+    def _lp_update_labels(self):
+        if not self.lp_edges:
+            self.lp_lbl_edges.setText("Edge loops: none")
+        else:
+            self.lp_lbl_edges.setText(
+                "Edge loops: {0} edge(s) in {1} loop(s)  ({2})".format(
+                    len(self.lp_edges), self.lp_loop_count,
+                    self.lp_edges[0].split(".")[0].split("|")[-1]))
+        if not self.lp_verts:
+            self.lp_lbl_verts.setText("Vertices: none")
+        else:
+            self.lp_lbl_verts.setText(
+                "Vertices: {0} stored  ({1})".format(
+                    len(self.lp_verts),
+                    self.lp_verts[0].split(".")[0].split("|")[-1]))
+
+    def _lp_select(self, names, label):
+        alive_names = loop_alive(names)
+        if not alive_names:
+            self._log("[WARN] Nothing stored for {0}.".format(label))
+            return
+        try:
+            cmds.select(alive_names, replace=True)
         except Exception as exc:
-            self._log("[ERROR] Build failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+            self._log("[ERROR] Select {0}: {1}".format(label, exc))
+            return
+        self._log("Selected {0} stored {1}.".format(len(alive_names), label))
+
+    # ---- Edge Loop : 핸들러
+
+    def on_lp_store_edges(self):
+        try:
+            edges = loop_parse_edges()
+        except Exception as exc:
+            self._log("[WARN] Store Edge Loops: {0}".format(exc))
+            return
+        self.lp_edges = edges
+        self.lp_loop_count = len(group_loop_edges(edges))
+        self._lp_update_labels()
+        self._log("Stored {0} edge(s) forming {1} loop(s).".format(
+            len(edges), self.lp_loop_count))
+
+    def on_lp_select_edges(self):
+        self._lp_select(self.lp_edges, "edges")
+
+    def on_lp_clear_edges(self):
+        self.lp_edges = []
+        self.lp_loop_count = 0
+        self._lp_update_labels()
+        self._log("Cleared the stored edge loops.")
+
+    def on_lp_store_verts(self):
+        try:
+            verts = loop_parse_vertices()
+        except Exception as exc:
+            self._log("[WARN] Store Vertices: {0}".format(exc))
+            return
+        self.lp_verts = verts
+        self._lp_update_labels()
+        self._log("Stored {0} vertex(es).".format(len(verts)))
+
+    def on_lp_select_verts(self):
+        self._lp_select(self.lp_verts, "vertices")
+
+    def on_lp_clear_verts(self):
+        self.lp_verts = []
+        self._lp_update_labels()
+        self._log("Cleared the stored vertices.")
+
+    def on_lp_build(self):
+        self._log("--- Build from Edge Loops ---")
+        prefix = self.lp_le_prefix.text().strip() or LOOP_DEFAULT_PREFIX
+        degree = CURVE_DEGREES[self.lp_cb_degree.currentIndex()]
+
+        with undo_chunk():
+            try:
+                report = run_build_loop_drivers(
+                    self.lp_edges, self.lp_verts, prefix=prefix, degree=degree,
+                    orient=self.lp_cb_orient.isChecked(),
+                    aim_axis=self.lp_cb_aim.currentText(),
+                    use_normal_curve=self.lp_cb_norcrv.isChecked(),
+                    normal_curve_length=self.lp_dsb_norcrv_len.value(),
+                    create_set=self.lp_cb_make_set.isChecked(),
+                    create_joints=self.lp_cb_joints.isChecked(),
+                    joint_radius=self.lp_dsb_joint_radius.value(),
+                    create_controls=self.lp_cb_controls.isChecked())
+            except Exception as exc:
+                self._log("[ERROR] Build failed: {0}".format(exc))
+                return
+
+        self._log("Curves: {0} (from {1} loop(s)) -> {2}".format(
+            len(report["curves"]), report["loops"], ", ".join(report["curves"])))
+        self._log("Nulls: {0} under {1}".format(
+            len(report["nulls"]), report["null_group"]))
+        for null, curve, param in report["attached"]:
+            self._log("  {0} -> {1} @ param {2:.4f}".format(null, curve, param))
+        for obj, reason in report["failed"]:
+            self._log("[WARN] Skipped {0}: {1}".format(obj, reason))
+        if report["controls"]:
+            self._log("Controllers: {0} (null > con > ctl > tgt; the TGT drives "
+                      "the joint)".format(len(report["controls"])))
+        if report["joints"]:
+            self._log("Joints: {0} under {1} (parentConstrained to the "
+                      "{2})".format(len(report["joints"]),
+                                    report["joint_group"],
+                                    "tgt nodes" if report["controls"]
+                                    else "nulls"))
+        for norcrv in report["norcrvs"]:
+            self._log("Normal curve created: {0} (rotate it to control "
+                      "twist)".format(norcrv))
+        for set_node in report["sets"]:
+            self._log("pointOnCurveInfo nodes grouped into set: {0}".format(
+                set_node))
+
+    def on_atc_get_curve(self):
+        """현재 선택의 첫 오브젝트를 Attachment Curve / Surface 로 설정."""
+        selection = MayaScene.selection()
+        if not selection:
+            self._log("[WARN] Nothing selected. Select a curve or a NURBS "
+                      "surface first.")
+            return
+        self.atc_le_curve.setText(selection[0])
+        if attach_target_kind(selection[0]) is None:
+            self._log("[WARN] {0} is not a NURBS curve or NURBS surface.".format(
+                selection[0]))
+
+    def _atc_check_target(self, curve):
+        """Attachment Curve / Surface 칸을 검사해 kind('curve'|'surface')를, 문제면 None."""
+        if not curve:
+            self._log("[WARN] Attachment Curve / Surface is empty. Use Get to "
+                      "set it.")
+            return None
+        if not MayaScene.exists(curve):
+            self._log("[WARN] Not found in scene: {0}".format(curve))
+            return None
+        kind = attach_target_kind(curve)
+        if kind is None:
+            self._log("[WARN] Not a NURBS curve or NURBS surface: {0}".format(
+                curve))
+        return kind
+
+    def on_atc_build(self):
+        self._log("--- Attach to Closest Point ---")
+        curve = self.atc_le_curve.text().strip()
+        objects = self.atc_objs_tsl.get_all_items()
+
+        kind = self._atc_check_target(curve)
+        if kind is None:
+            return
+        if not objects:
+            self._log("[WARN] Objects list is empty. Add objects first.")
+            return
+
+        orient = self.atc_cb_orient.isChecked()
+        aim_axis = self.atc_cb_aim.currentText()
+        use_norcrv = self.atc_cb_norcrv.isChecked()
+        norcrv_len = self.atc_dsb_norcrv_len.value()
+        create_set = self.atc_cb_make_set.isChecked()
+        maintain_offset = self.atc_cb_maintain_offset.isChecked()
+
+        with undo_chunk():
+            try:
+                attached, failed, set_node, norcrv = run_attach_to_closest(
+                    curve, objects, orient=orient, aim_axis=aim_axis,
+                    use_normal_curve=use_norcrv,
+                    normal_curve_length=norcrv_len,
+                    create_set=create_set,
+                    maintain_offset=maintain_offset)
+            except Exception as exc:
+                self._log("[ERROR] Attach failed: {0}".format(exc))
+                return
+
+        surface = kind == "surface"
+        self._log(
+            "Attached {n} object(s) to {k} '{c}' | orient: {o}{axis}{nc}{mo}".format(
+                n=len(attached), k=kind, c=curve,
+                o="on" if orient else "off",
+                axis=" ({0})".format(aim_axis) if orient else "",
+                nc=" | norCrv" if (orient and use_norcrv and not surface) else "",
+                mo=" | maintain offset" if maintain_offset else ""))
+        if orient and use_norcrv and surface:
+            self._log("norCrv is not used on a surface (the surface normal is "
+                      "the up vector).")
+        if norcrv:
+            self._log(
+                "Normal curve created: {0} "
+                "(rotate/reshape it to control up & twist)".format(norcrv))
+        for obj, param in attached:
+            self._log("  {0} -> {1}".format(obj, self._atc_param_text(param)))
+        for obj, reason in failed:
+            self._log("[WARN] Skipped {0}: {1}".format(obj, reason))
+        if set_node:
+            self._log("Point info nodes grouped into set: {0}".format(set_node))
+
+    def on_atc_distribute(self):
+        """커브(또는 서피스)에 새 드라이버 N 개를 균일 파라미터 간격으로 생성·어태치(ref 원래 동작)."""
+        self._log("--- Distribute Drivers ---")
+        curve = self.atc_le_curve.text().strip()
+
+        kind = self._atc_check_target(curve)
+        if kind is None:
+            return
+        surface_axis = self.atc_cb_surface_axis.currentText()
+
+        count = self.atc_sb_count.value()
+        driver_type = self.atc_cb_drvtype.currentText().lower()
+        full_range = self.atc_cb_fullrange.isChecked()
+        orient = self.atc_cb_orient.isChecked()
+        aim_axis = self.atc_cb_aim.currentText()
+        use_norcrv = self.atc_cb_norcrv.isChecked()
+        norcrv_len = self.atc_dsb_norcrv_len.value()
+        create_set = self.atc_cb_make_set.isChecked()
+
+        with undo_chunk():
+            try:
+                created, set_node, norcrv = run_attach_uniform(
+                    curve, count, driver_type=driver_type, full_range=full_range,
+                    orient=orient, aim_axis=aim_axis,
+                    use_normal_curve=use_norcrv,
+                    normal_curve_length=norcrv_len,
+                    create_set=create_set, surface_axis=surface_axis)
+            except Exception as exc:
+                self._log("[ERROR] Distribute failed: {0}".format(exc))
+                return
+
+        surface = kind == "surface"
+        self._log(
+            "Distributed {n} {t} driver(s) on {k} '{c}'{sa} | range: {rng} | "
+            "orient: {o}{axis}{nc}".format(
+                n=len(created), t=driver_type, k=kind, c=curve,
+                sa=" along {0}".format(surface_axis) if surface else "",
+                rng="full" if full_range else "open-ended",
+                o="on" if orient else "off",
+                axis=" ({0})".format(aim_axis) if orient else "",
+                nc=" | norCrv" if (orient and use_norcrv and not surface) else ""))
+        if norcrv:
+            self._log(
+                "Normal curve created: {0} "
+                "(rotate/reshape it to control up & twist)".format(norcrv))
+        for drv, param in created:
+            self._log("  {0} -> {1}".format(drv, self._atc_param_text(param)))
+        if set_node:
+            self._log("Point info nodes grouped into set: {0}".format(set_node))
+
+    # ================================================================
+    # Tab : Stretch  (ref/ref_01_StretchTool.mel Stretch 기능 이식 + 리팩토링)
+    # ================================================================
+
+    def _build_stretch_tab(self):
+        """Default Distance 어트리뷰트(a)를 driver 로 Stretch 어트리뷰트를 구동하는 driven key.
+
+        f(x)=x-a+1 또는 -x+a+1 (linear 탄젠트, pre/post infinity 사용자 지정).
+        Default 가 1개면 1:n, 아니면 n:n 으로 짝짓는다(MEL 동작 유지).
+        """
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        # Default Distance (driver) : Objects + Attributes
+        self.stc_def_objs_tsl, self.stc_def_attr_tsl, self.stc_def_flt = \
+            self._stretch_obj_attr_group(
+                root, "Default Distance", "def",
+                "Driver objects. The chosen attribute's current value is 'a' "
+                "(the rest distance where the stretch output = 1).")
+
+        # Stretch Object (driven) : Objects + Attributes (multiple attrs allowed)
+        self.stc_str_objs_tsl, self.stc_str_attr_tsl, self.stc_str_flt = \
+            self._stretch_obj_attr_group(
+                root, "Stretch Object", "str",
+                "Driven objects. Every selected attribute receives f(driver) "
+                "(select one or more).", multi_attr=True)
+
+        # Function + Infinity options
+        opt_group = QGroupBox("Function / Infinity")
+        opt_layout = QVBoxLayout(opt_group)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Function"))
+        self.stc_cb_func = QComboBox()
+        self.stc_cb_func.addItems(list(FUNCTIONS))
+        self.stc_cb_func.setToolTip(
+            "a = Default Distance attr value, original = Stretch attr value at build.\n"
+            "All modes keep the Stretch attr's original value at rest (driver = a).\n"
+            "f(x)=x-a+1 : slope +1 linear (grows as the driver grows).\n"
+            "f(x)=-x+a+1 : slope -1 linear (shrinks as the driver grows).\n"
+            "Sigmoid (x-:max, x+:min): S-curve; driver -> -inf converges to Threshold\n"
+            "   Max, driver -> +inf converges to Threshold Min (>=0). Passes (a, original).\n"
+            "Sigmoid rev: same but the two directions are swapped.")
+        self.stc_cb_func.currentIndexChanged.connect(self._stc_sync_func_enabled)
+        row.addWidget(self.stc_cb_func, stretch=1)
+        opt_layout.addLayout(row)
+
+        # Pre/Post Infinity (linear modes only) — 컨테이너로 묶어 라벨까지 함께 비활성화.
+        self.stc_infinity_box = QWidget()
+        row = QHBoxLayout(self.stc_infinity_box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Pre Infinity"))
+        self.stc_cb_pre = QComboBox()
+        self.stc_cb_pre.addItems(list(INFINITY_TYPES))
+        self.stc_cb_pre.setCurrentText(DEFAULT_INFINITY)
+        self.stc_cb_pre.setToolTip(
+            "Linear modes only. Curve behaviour left of the first key (driver < a). "
+            "'Cycle with Offset' keeps the line straight.")
+        row.addWidget(self.stc_cb_pre)
+        row.addWidget(QLabel("Post Infinity"))
+        self.stc_cb_post = QComboBox()
+        self.stc_cb_post.addItems(list(INFINITY_TYPES))
+        self.stc_cb_post.setCurrentText(DEFAULT_INFINITY)
+        self.stc_cb_post.setToolTip(
+            "Linear modes only. Curve behaviour right of the last key (driver > a+1). "
+            "'Cycle with Offset' keeps the line straight.")
+        row.addWidget(self.stc_cb_post)
+        row.addStretch(1)
+        opt_layout.addWidget(self.stc_infinity_box)
+
+        # Sigmoid params (sigmoid modes only) — 컨테이너로 묶어 라벨까지 함께 비활성화.
+        self.stc_sigmoid_box = QWidget()
+        row = QHBoxLayout(self.stc_sigmoid_box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel("Sharpness"))
+        self.stc_dsb_base = QDoubleSpinBox()
+        self.stc_dsb_base.setDecimals(4)
+        self.stc_dsb_base.setRange(1.0001, 1000000.0)
+        self.stc_dsb_base.setValue(DEFAULT_BASE)
+        self.stc_dsb_base.setFixedWidth(90)
+        self.stc_dsb_base.setToolTip(
+            "Sigmoid only. Base of the exponent (the 'e' in 1/(1+e^-x)); higher = "
+            "sharper transition. Default e ~ 2.7183. Must be > 1.\n"
+            "This value is added as a 'stretchSharpness' attribute on the Default "
+            "Distance object and wired to the network, so you can tweak it live in "
+            "the scene.")
+        row.addWidget(self.stc_dsb_base)
+        row.addWidget(QLabel("Thresh Min"))
+        self.stc_dsb_tmin = QDoubleSpinBox()
+        self.stc_dsb_tmin.setDecimals(3)
+        self.stc_dsb_tmin.setRange(0.0, 1000000.0)
+        self.stc_dsb_tmin.setValue(DEFAULT_THRESHOLD_MIN)
+        self.stc_dsb_tmin.setFixedWidth(80)
+        self.stc_dsb_tmin.setToolTip(
+            "Sigmoid only. Plateau the output converges to on the 'min' side. "
+            "Min is 0 so the driven value never goes below 0.\n"
+            "Added as a 'stretchThreshMin' attribute on the Default Distance object "
+            "and wired live.")
+        row.addWidget(self.stc_dsb_tmin)
+        row.addWidget(QLabel("Thresh Max"))
+        self.stc_dsb_tmax = QDoubleSpinBox()
+        self.stc_dsb_tmax.setDecimals(3)
+        self.stc_dsb_tmax.setRange(0.0, 1000000.0)
+        self.stc_dsb_tmax.setValue(DEFAULT_THRESHOLD_MAX)
+        self.stc_dsb_tmax.setFixedWidth(80)
+        self.stc_dsb_tmax.setToolTip(
+            "Sigmoid only. Plateau the output converges to on the 'max' side. "
+            "The Stretch attr's original value must lie strictly between Min and Max.\n"
+            "Added as a 'stretchThreshMax' attribute on the Default Distance object "
+            "and wired live.")
+        row.addWidget(self.stc_dsb_tmax)
+        row.addStretch(1)
+        opt_layout.addWidget(self.stc_sigmoid_box)
+        root.addWidget(opt_group)
+
+        self._stc_sync_func_enabled()
+
+        # Apply
+        self.stc_btn_apply = QPushButton("Apply Stretch")
+        self.stc_btn_apply.setMinimumHeight(34)
+        self.stc_btn_apply.setToolTip(
+            "Build a driver network per pair: the Default Distance attr drives the "
+            "Stretch attr through the chosen function (linear or sigmoid). Every mode "
+            "keeps the Stretch attr's original value at rest (driver = a). One undo step.")
+        self.stc_btn_apply.clicked.connect(self.on_stc_apply)
+        root.addWidget(self.stc_btn_apply)
+
+        return tab
+
+    def _stretch_obj_attr_group(self, root, title, prefix, obj_tooltip,
+                                multi_attr=False):
+        """Objects TSL + Attributes TSL(List Attributes/Filter) 한 쌍의 그룹을 만든다.
+
+        반환: (objs_tsl, attr_tsl, filter_widget). prefix 는 List 핸들러가
+        어느 쌍인지 구분하는 태그로만 쓴다(위젯 이름은 호출부가 보관).
+        multi_attr=True 면 어트리뷰트를 여러 개 선택할 수 있다(Stretch Object 쪽).
+        """
+        group = QGroupBox(title)
+        g_layout = QVBoxLayout(group)
+
+        row = QHBoxLayout()
+        objs_tsl = JUN_mod_tsl_qt.JUN_mod_tsl_qt_v01(
+            title="Objects", log_callback=self._log)
+        objs_tsl.setToolTip(obj_tooltip)
+        attr_tsl = JUN_mod_tsl_qt.JUN_mod_tsl_qt_v01(
+            title="Attributes", show_select=False, multi_select=multi_attr,
+            log_callback=self._log)
+
+        # Attr Filter — 공용 위젯 (Remap 탭과 동일 패턴).
+        # List Attributes 버튼이 이 위젯을 참조하므로 먼저 만든다.
+        flt = JUN_mod_filter_qt.JUN_mod_filter_qt_v01(
+            attr_tsl.list_widget,
+            placeholder="Type any part of an attribute name (e.g. distance)")
+
+        # List Attributes 버튼을 편집 버튼 행 맨 앞에 (Remap 탭과 동일 패턴).
+        attr_tsl.add_button(
+            "List Attributes",
+            lambda: self._stc_list_attrs(objs_tsl, attr_tsl, flt), index=0)
+        row.addWidget(objs_tsl)
+        row.addWidget(attr_tsl)
+        g_layout.addLayout(row)
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(flt, 1)
+        btn_reveal = QPushButton("Reveal")
+        btn_reveal.setFixedWidth(70)
+        btn_reveal.setToolTip(
+            "Re-query the first object by the filter text to reveal attributes that\n"
+            "are not currently listed, then list those instead.")
+        btn_reveal.clicked.connect(
+            lambda: self._reveal_attrs(objs_tsl, attr_tsl, flt, "Object"))
+        search_row.addWidget(btn_reveal)
+        g_layout.addLayout(search_row)
+
+        root.addWidget(group, stretch=1)
+        return objs_tsl, attr_tsl, flt
+
+    def _stc_list_attrs(self, objs_tsl, attr_tsl, flt):
+        """objs_tsl 첫 오브젝트의 어트리뷰트 전체를 attr_tsl 에 채운다."""
+        objs = objs_tsl.get_all_nodes()
+        if not objs:
+            self._log("[WARN] Object list is empty. Add objects first.")
+            return
+        first = objs[0]
+        attrs = MayaScene.list_attrs(first)
+        attr_tsl.set_items(attrs)
+        self._log(self._relist_msg(flt, len(attrs), first))
+
+    def _stc_sync_func_enabled(self, *args):
+        """선택한 Function 에 따라 infinity(선형 전용)/sigmoid 파라미터 박스 활성 상태 토글.
+
+        각 행을 컨테이너 위젯으로 묶어 통째로 setEnabled 하므로 라벨(Sharpness/Thresh Min/Max,
+        Pre/Post Infinity)까지 함께 회색 처리된다.
+        """
+        is_sigmoid = self.stc_cb_func.currentText() in SIGMOID_FUNCTIONS
+        self.stc_infinity_box.setEnabled(not is_sigmoid)
+        self.stc_sigmoid_box.setEnabled(is_sigmoid)
+
+    def on_stc_apply(self):
+        self._log("--- Apply Stretch ---")
+        def_objs = self.stc_def_objs_tsl.get_all_nodes()
+        str_objs = self.stc_str_objs_tsl.get_all_nodes()
+        def_attrs = self._visible_selected_attrs(
+            self.stc_def_flt, "Default Distance attributes")
+        str_attrs = self._visible_selected_attrs(
+            self.stc_str_flt, "Stretch Object attributes")
+
+        if not def_objs:
+            self._log("[WARN] Default Distance object list is empty.")
+            return
+        if not str_objs:
+            self._log("[WARN] Stretch Object list is empty.")
+            return
+        if not def_attrs:
+            self._log("[WARN] Select one Default Distance attribute "
+                      "(List Attributes, then click one).")
+            return
+        if not str_attrs:
+            self._log("[WARN] Select one or more Stretch attribute(s) "
+                      "(List Attributes, then click).")
+            return
+
+        # 오브젝트 단위 페어링: driver 가 1개면 1:n(모든 stretch 를 그 하나가 구동),
+        # 아니면 n:n(순서쌍, min 길이).
+        def_attr = def_attrs[0]  # driver 는 단일 어트리뷰트.
+        if len(def_objs) == 1:
+            obj_pairs = [(def_objs[0], s_obj) for s_obj in str_objs]
+        else:
+            obj_pairs = list(zip(def_objs, str_objs))
+
+        # 선택한 모든 Stretch 어트리뷰트로 확장(오브젝트 바깥, 어트리뷰트 안쪽 순서로 정렬).
+        default_pairs = []
+        stretch_pairs = []
+        for d_obj, s_obj in obj_pairs:
+            for attr in str_attrs:
+                default_pairs.append((d_obj, def_attr))
+                stretch_pairs.append((s_obj, attr))
+
+        func = self.stc_cb_func.currentText()
+        pre_inf = self.stc_cb_pre.currentText()
+        post_inf = self.stc_cb_post.currentText()
+        is_sigmoid = func in SIGMOID_FUNCTIONS
+        base = self.stc_dsb_base.value()
+        tmin = self.stc_dsb_tmin.value()
+        tmax = self.stc_dsb_tmax.value()
+
+        with undo_chunk():
+            try:
+                built, skipped = run_build_stretch(
+                    default_pairs, stretch_pairs, func=func,
+                    pre_infinity=pre_inf, post_infinity=post_inf,
+                    base=base, threshold_min=tmin, threshold_max=tmax)
+            except Exception as exc:
+                self._log("[ERROR] Apply Stretch failed: {0}".format(exc))
+                return
+
+        mode = "1:n" if len(def_objs) == 1 else "n:n"
+        if is_sigmoid:
+            detail = ("base {base:.4f} | thresholds [{tmin:g}, {tmax:g}] | "
+                      "live attrs on driver".format(base=base, tmin=tmin, tmax=tmax))
+        else:
+            detail = "pre '{pre}' / post '{post}'".format(pre=pre_inf, post=post_inf)
+        self._log(
+            "Stretch built: {n} node network(s) | {mode} | {natt} attr(s) | {func} | "
+            "{detail} | rest = original".format(
+                n=len(built), mode=mode, natt=len(str_attrs), func=func, detail=detail))
+        for driver_plug, driven_plug, a, original, node in built:
+            self._log("  {driver} (a={a:.4f}) -> {driven} "
+                      "(rest={o:.4f}, {node})".format(
+                          driver=driver_plug, a=a, driven=driven_plug,
+                          o=original, node=node))
+        for driven_plug, reason in skipped:
+            self._log("[WARN] Skipped {0}: {1}".format(driven_plug, reason))
 
     # ================================================================
     # Helper / About
     # ================================================================
+
+    # ================================================================
+    # Tab : Seal  (입술 지퍼 — docs/plans/A00170_Seal_plan.md)
+    # ================================================================
+
+    def _build_seal_tab(self):
+        """커브에 어태치된 위/아래 입술 리그를 '끝에서 중앙으로' 다물린다.
+
+        AttachCrv > Edge Loop 로 만든 널(또는 그 조인트)을 위/아래로 나눠 담고 Build 하면
+        컨트롤러의 `sealR` / `sealL` 로 양 방향을 **독립적으로** 닫을 수 있다.
+        """
+        tab = QWidget()
+        root = QVBoxLayout(tab)
+
+        desc = QLabel(
+            "Close the lips from a corner toward the centre (lip zip).\n"
+            "sealR and sealL are independent, so both corners can zip in at once.\n"
+            "List the curve-attached nulls (or their joints) of each lip line.\n"
+            "Build with the lips in their closed (neutral) pose - that pose IS "
+            "the shape they seal to.")
+        desc.setAlignment(Qt.AlignCenter)
+        root.addWidget(desc)
+
+        list_row = QHBoxLayout()
+        self.seal_up_tsl = JUN_mod_tsl_qt.JUN_mod_tsl_qt_v01(
+            title="Upper", select_label="Select", list_min_height=120)
+        self.seal_lo_tsl = JUN_mod_tsl_qt.JUN_mod_tsl_qt_v01(
+            title="Lower", select_label="Select", list_min_height=120)
+        hint = ("Anything on the lip line works: the nulls, their controllers "
+                "(_ctl / _tgt), the joints, the whole null group, or even "
+                "just the attach curve.\n"
+                "One curve per lip or a single closed curve wrapping both - "
+                "either way, just split its nulls into Upper and Lower.")
+        self.seal_up_tsl.setToolTip(hint)
+        self.seal_lo_tsl.setToolTip(hint)
+        list_row.addWidget(self.seal_up_tsl)
+        list_row.addWidget(self.seal_lo_tsl)
+        root.addLayout(list_row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Controller"))
+        self.seal_le_ctrl = QLineEdit()
+        self.seal_le_ctrl.setToolTip(
+            "The control that gets sealR / sealL / sealBias / sealBand / "
+            "sealMerge.")
+        row.addWidget(self.seal_le_ctrl)
+        btn_ctrl = QPushButton("Get")
+        btn_ctrl.setFixedWidth(70)
+        btn_ctrl.clicked.connect(self.on_seal_get_ctrl)
+        row.addWidget(btn_ctrl)
+        root.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Reference"))
+        self.seal_le_ref = QLineEdit()
+        self.seal_le_ref.setPlaceholderText("optional - the head joint")
+        self.seal_le_ref.setToolTip(
+            "The space the closed pose is stored in, so the lips still meet in "
+            "the right place\nwhen the head turns or the character walks away.\n"
+            "Leave it empty to use each null's own parent - that is enough when "
+            "the null group\nalready follows the head. Fill it in when the "
+            "nulls sit outside the head hierarchy.\n"
+            "Preview Pairing and Build check this and say so when the nulls do "
+            "not follow\nwhatever moves the attach curve.")
+        row.addWidget(self.seal_le_ref)
+        btn_ref = QPushButton("Get")
+        btn_ref.setFixedWidth(70)
+        btn_ref.clicked.connect(self.on_seal_get_ref)
+        row.addWidget(btn_ref)
+        btn_ref_clear = QPushButton("Clear")
+        btn_ref_clear.setFixedWidth(70)
+        btn_ref_clear.clicked.connect(lambda: self.seal_le_ref.clear())
+        row.addWidget(btn_ref_clear)
+        root.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Name Prefix"))
+        self.seal_le_prefix = QLineEdit(SEAL_DEFAULT_PREFIX)
+        self.seal_le_prefix.setToolTip(
+            "Names the created nodes and the tracking set "
+            "(<prefix>_seal_SET) that Remove uses.")
+        row.addWidget(self.seal_le_prefix)
+        root.addLayout(row)
+
+        # ---- 지퍼 방향 / 짝짓기
+        pair_box = QGroupBox("Zip direction && pairing")
+        pair_lay = QVBoxLayout(pair_box)
+
+        axis_row = QHBoxLayout()
+        axis_row.addWidget(QLabel("Corner Axis"))
+        self.seal_axis_group = QButtonGroup(self)
+        for i, axis in enumerate(SEAL_AXES):
+            rb = QRadioButton("World " + axis.upper())
+            rb.setProperty("axis", axis)
+            if axis == "x":
+                rb.setChecked(True)
+            self.seal_axis_group.addButton(rb, i)
+            axis_row.addWidget(rb)
+        axis_row.addStretch(1)
+        pair_lay.addLayout(axis_row)
+
+        start_row = QHBoxLayout()
+        start_row.addWidget(QLabel("sealR starts at"))
+        self.seal_start_group = QButtonGroup(self)
+        self.seal_rb_min = QRadioButton("Min end (-)")
+        self.seal_rb_min.setChecked(True)
+        self.seal_rb_max = QRadioButton("Max end (+)")
+        self.seal_start_group.addButton(self.seal_rb_min, 0)
+        self.seal_start_group.addButton(self.seal_rb_max, 1)
+        self.seal_rb_min.setToolTip(
+            "Which end of the chosen axis sealR zips from. sealL always starts "
+            "at the other end.\nCurve direction does not matter - the position "
+            "on the axis decides.")
+        start_row.addWidget(self.seal_rb_min)
+        start_row.addWidget(self.seal_rb_max)
+        start_row.addStretch(1)
+        pair_lay.addLayout(start_row)
+
+        metric_row = QHBoxLayout()
+        metric_row.addWidget(QLabel("Pair by"))
+        self.seal_cmb_metric = QComboBox()
+        self.seal_cmb_metric.addItems(["Curve parameter", "World distance"])
+        self.seal_cmb_metric.setToolTip(
+            "How 'closest' is measured when matching an upper driver with a "
+            "lower one.\n"
+            "Curve parameter (default): same progress along the lip - works "
+            "even if the two\nlines have different joint counts or lengths.\n"
+            "World distance: straight distance between the drivers - use it "
+            "when the two\nlines are spaced very differently.\n"
+            "Either way the positions do NOT have to match exactly; the "
+            "closest pair wins,\nand each driver is used only once.")
+        metric_row.addWidget(self.seal_cmb_metric)
+        metric_row.addWidget(QLabel("Max"))
+        self.seal_dsb_tol = QDoubleSpinBox()
+        self.seal_dsb_tol.setRange(0.0, 100000.0)
+        self.seal_dsb_tol.setDecimals(3)
+        self.seal_dsb_tol.setSingleStep(0.05)
+        self.seal_dsb_tol.setValue(0.0)
+        self.seal_dsb_tol.setSpecialValueText("no limit")
+        self.seal_dsb_tol.setKeyboardTracking(False)
+        self.seal_dsb_tol.setToolTip(
+            "Refuse a pair that is further apart than this (0 = no limit).\n"
+            "Unmatched drivers are reported instead of being paired with "
+            "something far away.")
+        metric_row.addWidget(self.seal_dsb_tol)
+        metric_row.addStretch(1)
+        pair_lay.addLayout(metric_row)
+
+        self.seal_cb_corners = QCheckBox("Skip the corner joints")
+        self.seal_cb_corners.setChecked(True)
+        self.seal_cb_corners.setToolTip(
+            "The mouth corners are shared by both lip lines and are always "
+            "closed - sealing them only adds jitter.")
+        pair_lay.addWidget(self.seal_cb_corners)
+
+        btn_preview = QPushButton("Preview Pairing")
+        btn_preview.setToolTip(
+            "Show which upper driver pairs with which lower one, and the "
+            "position along the lip (u).")
+        btn_preview.clicked.connect(self.on_seal_preview)
+        pair_lay.addWidget(btn_preview)
+
+        self.seal_pair_view = QListWidget()
+        self.seal_pair_view.setMinimumHeight(90)
+        pair_lay.addWidget(self.seal_pair_view)
+        root.addWidget(pair_box)
+
+        # ---- 초기값
+        self.seal_cb_rotate = QCheckBox("Restore the closed-pose rotation")
+        self.seal_cb_rotate.setChecked(True)
+        self.seal_cb_rotate.setToolTip(
+            "On (default): a sealed driver ends up with exactly the orientation it had when\n"
+            "the seal was built - closing the lips never twists a null into a new direction.\n"
+            "Only applies where the curve drives rotation too (Edge Loop built with Orient);\n"
+            "drivers without a rotation connection already keep their rotation and are skipped.\n"
+            "Off: rotation is left to the curve while the lips close.")
+        root.addWidget(self.seal_cb_rotate)
+
+        value_row = QHBoxLayout()
+        value_row.addWidget(QLabel("Seal Bias"))
+        self.seal_dsb_bias = QDoubleSpinBox()
+        self.seal_dsb_bias.setRange(0.0, 1.0)
+        self.seal_dsb_bias.setSingleStep(0.05)
+        self.seal_dsb_bias.setDecimals(3)
+        self.seal_dsb_bias.setValue(0.5)
+        self.seal_dsb_bias.setKeyboardTracking(False)
+        self.seal_dsb_bias.setToolTip(
+            "Where the lips meet: 0 = the lower line, 0.5 = halfway, 1 = the "
+            "upper line.")
+        value_row.addWidget(self.seal_dsb_bias)
+        value_row.addWidget(QLabel("Band"))
+        self.seal_dsb_band = QDoubleSpinBox()
+        self.seal_dsb_band.setRange(0.02, 1.0)
+        self.seal_dsb_band.setSingleStep(0.05)
+        self.seal_dsb_band.setDecimals(3)
+        self.seal_dsb_band.setValue(0.35)
+        self.seal_dsb_band.setKeyboardTracking(False)
+        self.seal_dsb_band.setToolTip(
+            "How soft the zip front is. Small = joints snap shut one by one, "
+            "large = many close together.\nBoth values stay live on the "
+            "controller and can be tuned there afterwards.")
+        value_row.addWidget(self.seal_dsb_band)
+        value_row.addWidget(QLabel("Merge"))
+        self.seal_dsb_merge = QDoubleSpinBox()
+        self.seal_dsb_merge.setRange(0.0, 1.0)
+        self.seal_dsb_merge.setSingleStep(0.1)
+        self.seal_dsb_merge.setDecimals(3)
+        self.seal_dsb_merge.setValue(0.0)
+        self.seal_dsb_merge.setKeyboardTracking(False)
+        self.seal_dsb_merge.setToolTip(
+            "sealMerge - how much the two lips collapse onto each other.\n"
+            "0 (default): they meet keeping the gap they had in the closed "
+            "pose (lip thickness).\n"
+            "1: upper and lower land on exactly the same point, as in v01.19 "
+            "and earlier.\n"
+            "Live on the controller, so it can be dialled or keyed per shot.")
+        value_row.addWidget(self.seal_dsb_merge)
+        value_row.addStretch(1)
+        root.addLayout(value_row)
+
+        btn_row = QHBoxLayout()
+        self.seal_btn_build = QPushButton("Build Seal")
+        self.seal_btn_build.setMinimumHeight(34)
+        self.seal_btn_build.setToolTip(
+            "Insert the zip network. Building again on the same prefix rebuilds "
+            "it (no stacking). One undo step.")
+        self.seal_btn_build.clicked.connect(self.on_seal_build)
+        btn_row.addWidget(self.seal_btn_build)
+        self.seal_btn_remove = QPushButton("Remove Seal")
+        self.seal_btn_remove.setMinimumHeight(34)
+        self.seal_btn_remove.setToolTip(
+            "Delete the network and restore the original curve connections. "
+            "The controller attributes are kept (they may be keyed).")
+        self.seal_btn_remove.clicked.connect(self.on_seal_remove)
+        btn_row.addWidget(self.seal_btn_remove)
+        root.addLayout(btn_row)
+
+        self.seal_btn_rest = QPushButton("Update Rest Pose")
+        self.seal_btn_rest.setToolTip(
+            "Take the pose the lips are in right now as the new closed shape, "
+            "without rebuilding.\n"
+            "Pose the lips the way they should look when sealed, then press "
+            "this.\n"
+            "sealR / sealL are dropped to 0 while reading and put back "
+            "afterwards.")
+        self.seal_btn_rest.clicked.connect(self.on_seal_recapture)
+        root.addWidget(self.seal_btn_rest)
+
+        root.addStretch(1)
+        return tab
+
+    # ---- Seal : 헬퍼 / 핸들러
+
+    def _seal_axis(self):
+        btn = self.seal_axis_group.checkedButton()
+        return btn.property("axis") if btn else "x"
+
+    def _seal_metric(self):
+        return (SEAL_METRIC_DISTANCE if self.seal_cmb_metric.currentIndex() == 1
+                else SEAL_METRIC_PARAM)
+
+    def _seal_tolerance(self):
+        value = self.seal_dsb_tol.value()
+        return value if value > 0.0 else None
+
+    def _seal_inputs(self):
+        return (self.seal_up_tsl.get_all_items(),
+                self.seal_lo_tsl.get_all_items(),
+                self.seal_le_ctrl.text().strip(),
+                (self.seal_le_prefix.text().strip() or SEAL_DEFAULT_PREFIX))
+
+    def _seal_reference(self):
+        return self.seal_le_ref.text().strip() or None
+
+    def on_seal_get_ctrl(self):
+        selection = MayaScene.selection()
+        if not selection:
+            self._log("[WARN] Nothing selected. Select the controller first.")
+            return
+        self.seal_le_ctrl.setText(selection[0])
+
+    def on_seal_get_ref(self):
+        selection = MayaScene.selection()
+        if not selection:
+            self._log("[WARN] Nothing selected. Select the head (or whatever "
+                      "the lips should travel with) first.")
+            return
+        self.seal_le_ref.setText(selection[0])
+
+    def on_seal_preview(self):
+        """짝짓기 결과를 미리 보여 준다(씬은 건드리지 않는다)."""
+        upper, lower, _ctrl, _prefix = self._seal_inputs()
+        self.seal_pair_view.clear()
+
+        axis = self._seal_axis()
+        start_min = self.seal_rb_min.isChecked()
+        # Build 과 같은 준비 과정을 거친다(닫힌 커브 재정규화 포함).
+        up, lo, info = seal_prepare_sides(upper, lower, axis, start_min)
+        if not up or not lo:
+            if info["dropped"]:
+                self._log("[WARN] Upper and Lower resolve to the same {0} "
+                          "driver(s).".format(len(info["dropped"])))
+                self._log("       One curve around both lips? Then list each "
+                          "lip's nulls separately, not the whole curve in both.")
+                return
+            self._log("[WARN] Upper/Lower need curve-attached drivers "
+                      "(found {0} / {1}).".format(len(up), len(lo)))
+            self._log("       List the nulls, their _ctl / _tgt, the joints, "
+                      "the null group, or the attach curve - anything that "
+                      "traces back to a pointOnCurveInfo.")
+            return
+
+        if info["shared_curve"]:
+            self._log("One shared {0} curve - each lip re-spanned to its own "
+                      "0-1 arc.".format("closed" if info["closed"] else "open"))
+        flipped = info["flipped"]
+        metric = self._seal_metric()
+        pairs, skipped = seal_pair_drivers(
+            up, lo, self.seal_cb_corners.isChecked(), metric=metric,
+            tolerance=self._seal_tolerance())
+        skipped = list(info["dropped"]) + skipped
+
+        for u_entry, l_entry, u in pairs:
+            self.seal_pair_view.addItem(
+                "{0}   <->   {1}      u = {2:.3f}   gap = {3:.3f}".format(
+                    u_entry["node"].split("|")[-1],
+                    l_entry["node"].split("|")[-1], u,
+                    seal_pair_cost(u_entry, l_entry, metric)))
+        self._log("Pairing: {0} pair(s), {1} skipped.{2}".format(
+            len(pairs), len(skipped),
+            "  (u flipped to match the axis)" if any(flipped) else ""))
+        for node, why in skipped:
+            self._log("  skip {0} ({1})".format(node.split("|")[-1], why))
+        for warning in seal_rest_space_warnings(up + lo, self._seal_reference()):
+            self._log("[WARN] " + warning)
+
+    def on_seal_build(self):
+        self._log("--- Build Seal ---")
+        upper, lower, ctrl, prefix = self._seal_inputs()
+        if not ctrl:
+            self._log("[WARN] Controller is empty. Use Get to set it.")
+            return
+        if not MayaScene.exists(ctrl):
+            self._log("[WARN] Controller not found in scene: {0}".format(ctrl))
+            return
+        reference = self._seal_reference()
+        if reference and not MayaScene.exists(reference):
+            self._log("[WARN] Reference not found in scene: {0}".format(reference))
+            return
+
+        with undo_chunk():
+            try:
+                report = run_build_seal(
+                    upper, lower, ctrl, prefix=prefix, axis=self._seal_axis(),
+                    start_at_min=self.seal_rb_min.isChecked(),
+                    skip_corners=self.seal_cb_corners.isChecked(),
+                    bias=self.seal_dsb_bias.value(),
+                    band=self.seal_dsb_band.value(),
+                    metric=self._seal_metric(),
+                    tolerance=self._seal_tolerance(),
+                    blend_rotation=self.seal_cb_rotate.isChecked(),
+                    reference=reference,
+                    merge=self.seal_dsb_merge.value())
+            except Exception as exc:
+                self._log("[ERROR] Build Seal failed: {0}".format(exc))
+                return
+
+        self._log("Sealed {0} pair(s) | nodes: {1} | set: {2}".format(
+            len(report["pairs"]), len(report["nodes"]), report["set"]))
+        if report["shared_curve"]:
+            self._log("Upper and Lower share one {0} curve - each lip was "
+                      "re-spanned to its own 0-1 arc.".format(
+                          "closed" if report["closed"] else "open"))
+        self._log("Closed pose captured from the current scene pose, in {0} "
+                  "space.".format(
+                      "'" + report["reference"].split("|")[-1] + "'"
+                      if report["reference"] else "each null's parent"))
+        for warning in report["space_warnings"]:
+            self._log("[WARN] " + warning)
+        if self.seal_cb_rotate.isChecked():
+            total = len(report["pairs"]) * 2
+            self._log("Rotation restored to the closed pose on {0} of {1} "
+                      "driver(s).{2}".format(
+                          report["rotated"], total,
+                          "  (the rest are not rotation-driven by their curve, "
+                          "so they already keep it)"
+                          if report["rotated"] < total else ""))
+        if report["attrs"]:
+            self._log("Added on '{0}': {1}".format(
+                ctrl, ", ".join(report["attrs"])))
+        for up, lo, u in report["pairs"]:
+            self._log("  {0} <-> {1}   u = {2:.3f}".format(up, lo, u))
+        for node, why in report["skipped"]:
+            self._log("[WARN] Skipped {0} ({1})".format(node.split("|")[-1], why))
+        self._log("Drive '{0}.sealR' / '.sealL' (0-1) to zip the lips shut."
+                  .format(ctrl))
+        self._log("'{0}.sealMerge' 0 = keep the closed-pose gap, 1 = upper and "
+                  "lower land on the same point.".format(ctrl))
+
+    def on_seal_remove(self):
+        self._log("--- Remove Seal ---")
+        _u, _l, _c, prefix = self._seal_inputs()
+        with undo_chunk():
+            try:
+                restored, deleted = run_remove_seal(prefix)
+            except Exception as exc:
+                self._log("[ERROR] Remove Seal failed: {0}".format(exc))
+                return
+        if not deleted:
+            self._log("[WARN] Nothing to remove for prefix '{0}' "
+                      "({1}).".format(prefix, seal_set_name(prefix)))
+            return
+        self._log("Removed {0} node(s); {1} curve connection(s) restored. "
+                  "Controller attributes kept.".format(deleted, restored))
+
+    def on_seal_recapture(self):
+        """지금 씬 포즈를 새 '다물린 자리'로 다시 잡는다(리빌드 없이)."""
+        self._log("--- Update Rest Pose ---")
+        _u, _l, _c, prefix = self._seal_inputs()
+        with undo_chunk():
+            try:
+                count, ctrl = run_seal_recapture_rest(prefix)
+            except Exception as exc:
+                self._log("[ERROR] Update Rest Pose failed: {0}".format(exc))
+                return
+        self._log("The pose the lips are in now is the new closed shape "
+                  "({0} driver(s) updated).".format(count))
+        if ctrl:
+            self._log("Read with '{0}.sealR' / '.sealL' at 0; both were put "
+                      "back afterwards.".format(ctrl.split("|")[-1]))
 
     def _log(self, message):
         self.log_view.appendPlainText(message)
@@ -586,6 +2052,47 @@ class MainWindow(QWidget):
             "- Build (Converge to Center): Maya 2023+ node network. dilate (-90..90)\n"
             "  gathers joints to the center (+) or front (-) and keeps bound curves\n"
             "  on a sphere of radius R.\n"
+            "\n"
+            "[AttachCrv] (ported from ref attachDriverOnCurve)\n"
+            "- Attach to Closest Point: drives each listed object onto its closest\n"
+            "  parameter on the curve via a pointOnCurveInfo -> matrix network\n"
+            "  (parent-safe, live as the curve deforms). Optional orient to tangent.\n"
+            "  Maintain offset (default on): objects keep their current position,\n"
+            "  rotation, scale and channel values; offsetParentMatrix follows the curve.\n"
+            "- NURBS surface (from matrixPinning): put a surface in the Attachment\n"
+            "  field instead. Objects pin to the closest (u, v) via pointOnSurfaceInfo\n"
+            "  (X = tangent U, Y = normal, Z = X cross Y). Distribute spreads along the\n"
+            "  chosen Surface Axis at the middle of the other direction.\n"
+            "- Distribute Drivers on Curve (ref original): create N new Locator/Null\n"
+            "  drivers spread evenly from the curve start to its end (Count, full /\n"
+            "  open-ended range), attached with the same matrix network.\n"
+            "- Create Normal Curve (norCrv, default, ref-faithful): adds one straight\n"
+            "  norCrv under the curve; rotate/reshape it to control up & twist. Off:\n"
+            "  self-contained world-up frame.\n"
+            "\n"
+            "[Stretch] (ported from ref StretchTool.mel + refactor)\n"
+            "- Apply Stretch: the Default Distance attr (value a) drives every selected\n"
+            "  Stretch attr. Every mode keeps the Stretch attr's original value at rest\n"
+            "  (driver = a -> driven = original). One Default -> all Stretch (1:n),\n"
+            "  else paired n:n. Select multiple Stretch attributes to drive them all.\n"
+            "  - Linear f(x)=x-a+1 / -x+a+1: animCurveUU (linear tangents, user pre/post\n"
+            "    infinity, default Cycle w/ Offset) + an addDoubleLinear offset makes it\n"
+            "    additive: driven = original + (x-a) / (a-x).\n"
+            "  - Sigmoid / Sigmoid rev: analytic node network (multiplyDivide power etc.).\n"
+            "    An S-curve through (a, original) converging to Threshold Max / Min\n"
+            "    (Min >= 0 so it never goes below 0). Needs Min < original < Max.\n"
+            "    Sharpness (base), Threshold Min/Max are added as attributes on the\n"
+            "    Default Distance object and wired to the network, so you can tune the\n"
+            "    sigmoid live in the scene.\n"
+            "\n"
+            "[Seal] (lip zip on a curve-attached lip rig)\n"
+            "- Build Seal: sealR / sealL close each lip from a corner toward the\n"
+            "  centre, independently. The pose the lips are in at build time is the\n"
+            "  shape they seal to, stored in the Reference (head) space - so a sealed\n"
+            "  driver keeps its closed-pose rotation and the two lips keep their\n"
+            "  closed-pose gap instead of collapsing onto one point.\n"
+            "  sealMerge 1 brings back the old 'exactly the same point' behaviour.\n"
+            "- Update Rest Pose: re-take the closed shape from the current pose.\n"
             "\n"
             "Each build is one undo step. All UI text is English.\n"
             "\n"

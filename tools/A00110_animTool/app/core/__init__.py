@@ -7,9 +7,15 @@ from .mirror_token_store import MirrorTokenStore
 from .bake_manager import BakeManager
 from .follow_match_manager import FollowMatchManager
 from .offset_hold_manager import OffsetHoldManager
+from .stagger_offset_manager import StaggerOffsetSession
+from .euler_filter_manager import EulerFilterManager
+from .graph_view_manager import GraphViewManager
+from .graph_focus_manager import GraphFocusManager
+from .fill_key_manager import FillKeyManager, CURRENT_LAYER
 
 __all__ = [
     "KeyframeManager", "HotkeyManager", "PoseKeyManager", "CopyKeyManager",
     "MirrorKeyManager", "MirrorTokenStore", "BakeManager", "FollowMatchManager",
-    "OffsetHoldManager",
+    "OffsetHoldManager", "StaggerOffsetSession", "EulerFilterManager",
+    "GraphViewManager", "GraphFocusManager", "FillKeyManager", "CURRENT_LAYER",
 ]

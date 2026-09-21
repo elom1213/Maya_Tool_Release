@@ -2,6 +2,273 @@
 
 All notable changes to this tool are documented here.
 
+## [01.31] - 2026-09-18
+### Added
+- **Shift / Ctrl multi-select + multi-check** on the two check lists - Lineage `Add Node from Scan...`
+  and Path Structure `Folders to record`. Clicking the check box of a selected row (or Space) sets
+  every selected row. Framework shared behaviour `JUN_mod_checkList_qt`.
+
+## [01.29] - 2026-08-03
+### Added
+- **Path Structure — capture and recreate files, not just folders.** Two checkboxes,
+  **both on by default**:
+  - **Include files** (Save Structure) — Capture also records the file names it finds,
+    into a new `files` list in the structure JSON. Only *names* are stored, never file
+    contents. Depth and the "Folders to record" checklist apply to files exactly as they
+    do to folders, so `Capture Depth = 1` records only the files sitting directly in the
+    base folder. Files directly in the base are always included regardless of the
+    top-level checklist, because they belong to the base folder itself.
+  - **Create files** (Preview row, replaces the old *Show files*) — recorded files appear
+    in the Preview tree with checkboxes and are created by **Recreate**. What you see in
+    the tree is what gets created, which is the same rule Depth already followed; turning
+    it off hides *and* skips the files. Uncheck a single file to skip just that one.
+- Recreated files are **empty 0-byte files marked with `__`** appended to the full name —
+  `test.ma` → `test.ma__` — so a generated placeholder can never be mistaken for, or
+  opened as, a real scene. The suffix is not re-applied if the name already ends with it,
+  so capture-then-recreate round trips do not grow `____`.
+### Changed
+- `recreate()` now returns a **`RecreateResult`** (created/existing folders **and** files)
+  instead of a bare tuple. It still unpacks as `created, existing = recreate(...)`, so
+  existing callers keep working. The result message and log now report folder and file
+  counts separately.
+- Preview: when a structure has **no recorded files** (saved before this version, or with
+  *Include files* off), the tree falls back to listing the base folder's files from disk
+  as before — now **greyed out and without checkboxes**, making it obvious they are
+  reference only and are never created.
+### Fixed
+- An existing file at the target path is **never overwritten or truncated**. It is counted
+  as "already existed" and left untouched (exclusive `open(..., "x")`, so even a race
+  between the check and the write cannot clobber it).
+- Structures saved before this version load unchanged (`files` defaults to an empty list),
+  and recreate exactly as they did — folders only.
+
+## [01.27] - 2026-07-03
+### Added
+- **App / taskbar icon.** Added a blue folder + record-card + sync-badge icon
+  (`icon/A00210_FileManager.svg` → `.png` + multi-size `.ico` 16–256px) matching the
+  blue_dark theme. `launch.py` now sets it as the application/window icon and — on
+  Windows — sets an explicit **AppUserModelID** (`Dnable.JUN.A00210.FileManager`) so
+  the taskbar shows this icon instead of the generic `python.exe` icon when the tool
+  is run from a terminal. Icon path resolves in both dev and PyInstaller builds
+  (`app/config/app_meta.py`); `build_exe.bat` embeds the `.ico` and bundles it.
+### Changed
+- **Settings** — merged the separate **Store Repo** and **Shared Folder** rows into
+  a **single data-folder input** that adapts to the Source Mode. The label and hints
+  switch between *Store Repo* (Remote/Git) and *Shared Folder* (Local) as you change
+  the mode. Each mode still remembers its own path independently (kept in the profile
+  as `store_dir` / `local_dir`), so switching modes never clears the other path. No
+  profile migration needed — existing profiles load unchanged.
+
+## [01.25] - 2026-07-02
+### Fixed
+- **Path Structure** tab — multi-select checkbox toggle now **keeps the selection
+  across repeated clicks**. Previously the selected rows stayed selected only for
+  the first checkbox click and collapsed to a single row afterwards. The pre-click
+  selection is now captured on mouse-press (before Qt collapses it), so you can keep
+  toggling the same multi-selection over and over.
+
+## [01.24] - 2026-07-02
+### Changed
+- **Path Structure** tab — **Preview** is now an interactive **tree view**
+  (QTreeWidget) instead of plain text, like the A00240 PathTool *Tree* tab:
+  - **Show files** checkbox (default **off**) — folders only by default; when on,
+    files found on disk (under the local base folder) are shown too. Files are for
+    inspection only and are never recreated.
+  - **Expand** button — opens the same tree in a large window. Check-state changes
+    made there are reflected back into the tab.
+### Added
+- **Path Structure** tab — **depth + selective recreate** control:
+  - **Capture Depth** spinbox on the *Save Structure* group (1 = top-level only,
+    0 = All) replaces the old **Recursive** checkbox — capture the folder tree only
+    as deep as you want.
+  - **Depth** spinbox on the *Saved Structures* group limits how deep the preview
+    shows **and** how deep **Recreate** creates (0 = All).
+  - Each folder in the preview tree has a **checkbox**; unchecking excludes it from
+    **Recreate**. So you can recreate only the depth and paths you want. (Ancestor
+    folders needed by a checked child are still created.)
+  - **Multi-select** the tree rows with **Shift/Ctrl**, then toggle one of the
+    selected checkboxes to check/uncheck **all selected folders at once**.
+  - Older structures saved before this version load fine — `recursive: true` maps
+    to depth *All*, `recursive: false` to depth *top-level*.
+
+## [01.23] - 2026-06-26
+### Added
+- **File Manager** tab — **Source Mode** selector (Settings group). Choose where
+  records/thumbnails are read from and written to:
+  - **Remote (Git)** — the existing behavior: a central git data-repo synced with
+    **Pull / Push** (uses the **Store Repo** clone path).
+  - **Local (Shared / NAS)** — a new **Shared Folder** path is read and written
+    **directly, with no git**. Intended for teams sharing a NAS, where the file
+    server keeps the data in sync instead of pushing/pulling a git remote each
+    time. In this mode the git inputs (Store Repo, Remote, Branch, Remote URL) and
+    the **Pull / Push** buttons are disabled; use **Scan** to refresh.
+  - The mode is saved **per profile** (alongside the new `local_dir`), so e.g. a
+    `Work (NAS)` profile can use Local mode while a `Home` profile stays on Git.
+    All tabs (File Manager / Path Structure / Lineage) follow the active mode's
+    folder automatically.
+
+## [01.21] - 2026-06-22
+### Added
+- **File Manager** tab — **Edit** button on the **Log history** header. Opens an
+  *Edit Log History* dialog where each past entry's **author** and **note** can be
+  edited and individual entries **deleted** (timestamps are kept). OK replaces the
+  record's logs in order; press **Save Record** to persist (same flow as Add Log
+  Entry). Editing is structured per-entry, so timestamps/entry boundaries can't be
+  corrupted by free-text edits.
+
+## [01.20] - 2026-06-22
+### Added
+- **File Manager** tab — **settings Profiles**. A new **Profile** group (combo +
+  **New / Rename / Delete**) saves every user setting — Project Root, Store Repo,
+  Scan Dir, Remote, Branch, Remote URL, Author, Recursive, Show Recorded Only — as
+  a named profile (one JSON each, under `~/.jun_filemanager/profiles/`). Switch
+  profiles to instantly load that environment's settings (e.g. Home / Work).
+  - Switching a profile **auto-saves the current fields** to the outgoing profile
+    first (no lost edits), then loads the new one and **refreshes the Lineage /
+    Path Structure** saved-lists against the new Store Repo. The window also saves
+    the active profile on close, and remembers it across launches (`active.json`).
+  - **Save Settings** now writes to the active profile. The old single
+    `prefs.json` is **migrated once** into a `Default` profile (original kept as
+    `prefs.json.bak`); `prefs.load()/save()` stay back-compatible (they target the
+    active profile), so A00211_RefLineage keeps working unchanged.
+
+## [01.19] - 2026-06-22
+### Changed
+- **Lineage** tab — node right-click **Reveal in File Explorer**: if the file
+  exists on this machine it is revealed in File Explorer as before (no popup). If
+  it doesn't (e.g. a graph generated on another machine by **A00211_RefLineage**),
+  the file's **path is popped up** in a dialog (selectable/copyable) instead of
+  silently failing. The menu item is enabled whenever the node has a `key` (no
+  longer greyed out just because the file is missing locally).
+
+## [01.18] - 2026-06-22
+### Added
+- **Lineage** tab — **convert an edge's type by selecting it and switching the
+  edge-type dropdown**. Select one or more edges, then change the
+  `Lineage (parent)` / `Reference (dashed)` dropdown beside *Connect Mode* — the
+  selected arrows switch type in place (solid open-V ↔ dashed filled-triangle),
+  keeping their direction. The underlying relationship moves between the lineage
+  DAG (`parents`) and the `references` list, any custom edge color carries over,
+  and a conversion that would create a cycle is rejected. (Previously the dropdown
+  only chose what a *new* node→node drag created.)
+
+## [01.17] - 2026-06-22
+### Added
+- **Lineage** tab — **edge colors are now editable too**. Select one or more edges
+  (lineage and/or reference) and use **Set Color...** to recolor them, or **Reset
+  Color** to revert to the default (lineage = child lane color, reference = gray).
+  `Set Color... / Reset Color` now act on the combined node + edge selection. The
+  per-edge override is stored in the graph JSON (`edge_colors`, keyed by
+  `kind:src>dst`; back-compatible) and cleaned up when an endpoint node is deleted.
+
+### Fixed
+- **Lineage** tab — **overlapping arrows between the same two nodes are fanned
+  apart**. When a node pair had both a lineage and a reference edge (or otherwise
+  shared endpoints), the arrows were drawn on top of each other. Edges sharing the
+  same node pair are now spread horizontally by a fixed spacing so each arrow (and
+  its arrowhead) is distinct.
+
+## [01.16] - 2026-06-22
+### Added
+- **Lineage** tab — **Reference edges (dashed)**: a node can now point a **gray
+  dashed arrow** at another node to show a Maya **reference** relationship
+  (referenced file → the file that loads it), separate from the solid
+  version/branch lineage. Drawn in **Connect Mode** via the new **edge-type
+  dropdown** (`Lineage (parent)` / `Reference (dashed)`) beside the *Connect Mode*
+  button — pick *Reference*, then drag from the referenced node to the referencing
+  node. Reference edges are independent of the lineage DAG, so they **do not affect
+  lane/color/auto-layout**; they have their own cycle guard and a filled-triangle
+  arrowhead to tell them apart from lineage's open V. Stored as a new per-node
+  `references` list in the graph JSON (back-compatible: older graphs load fine).
+- **Lineage** tab — **Set Color... / Reset Color**: rubber-band select one or more
+  nodes and set a **custom fill color** on all of them at once (`Set Color...`,
+  color picker), or **Reset Color** to revert the selection to the automatic lane
+  color. The manual color is stored per node (`color`); lineage edges keep their
+  lane color, so the git-graph lane reading is preserved.
+
+## [01.15] - 2026-06-22
+### Fixed
+- **Lineage** tab — **middle-mouse pan no longer hits a wall**. Panning moves the
+  scrollbars, whose travel was bounded by the scene rect (content bounds + a small
+  200 px margin), so dragging stopped once you reached just past the nodes. The
+  pannable area is now a full viewport-worth of margin around the content, and the
+  scene rect grows on demand while you keep dragging toward an edge — so you can
+  pan freely well beyond the nodes (effectively unlimited). The margin resets to
+  the content on the next render, so it never bloats permanently.
+
+## [01.14] - 2026-06-19
+### Added
+- **File Manager** tab — **right-click a file → Show in File Explorer**: opens the
+  file's folder with the file selected (Windows `explorer /select,`, macOS `open
+  -R`, Linux `xdg-open`).
+- **File Manager** tab — **Name filter** bar above the file list: a text field +
+  **Filter** button (or Enter). Empty shows all; a keyword shows only files whose
+  name contains it (case-insensitive). Stacks with the other filters.
+- **File Manager** tab — **File Types** checkable dropdown next to *Show Recorded
+  Only*: lists the extensions found in the last scan, each toggleable (plus
+  **All**), so you can show only chosen types. Re-filters instantly; the menu
+  stays open while toggling multiple types.
+- **File Manager** tab — **Expand** button by *Log history* opens the log in a
+  large, resizable read-only window (the side panel is narrow for long logs).
+
+### Changed
+- **File Manager** tab — **Scan now lists all file types**, not just `.mb`/`.ma`
+  (`.fbx`/`.obj`/`.png` etc. are included); narrow the result with the new
+  **File Types** / **Name filter** controls.
+
+## [01.13] - 2026-06-19
+### Changed
+- **Settings** — the **Branch** field is now an editable dropdown. Opening it lists
+  the Store Repo's actual git branches (local + remote-tracking, deduped) so you can
+  pick a valid one instead of typing it. You can still type a branch name manually
+  (e.g. before the first clone/fetch). This avoids the common `src refspec <branch>
+  does not match any` push error caused by a branch-name mismatch (e.g. `main` vs
+  `master`). Backed by new `GitSync.list_branches()` (reads local refs, no network).
+
+## [01.12] - 2026-06-19
+### Changed
+- **File Manager** tab — *Load Image...* now opens in the Store Repo's `thumbs`
+  folder instead of the home directory, so a thumbnail already saved there can be
+  reused for several files. Falls back to home if the Store Repo is unset or its
+  `thumbs` folder does not exist yet.
+
+## [01.11] - 2026-06-19
+### Added
+- **File Manager** tab — **Show Recorded Only** checkbox next to *Recursive*. When
+  checked, the file list keeps only files that have a saved record (created via
+  *Save Record*), so a recursive scan that lists every file can be narrowed to the
+  ones tracked through this tool. Re-filters instantly on toggle (no re-scan
+  needed) and the state is remembered in prefs.
+
+## [01.10] - 2026-06-19
+### Changed
+- **Lineage** tab — rubber-band selection is now **intersect** mode: dragging a box
+  selects any node or connection the rectangle **touches**, instead of only the
+  ones fully enclosed by it (was `ContainsItemShape`, now `IntersectsItemShape`).
+
+## [01.09] - 2026-06-19
+### Added
+- **Lineage** tab — delete nodes **and connections**, with multi-select:
+  - **Click a connection (edge)** to select it (hit area widened so thin curves are
+    easy to hit; the selected edge is highlighted white/thick).
+  - **Delete / Backspace** removes the current selection — any mix of nodes and
+    connections — with no confirmation popup. Deleting a connection drops only that
+    parent link from the child; deleting a node also cleans up orphaned references.
+  - **Rubber-band multi-select**: drag on empty canvas to box-select nodes fully
+    inside the rectangle. Disabled while **Connect Mode** is on (so line-drawing is
+    unaffected); restored when Connect Mode turns off.
+### Changed
+- **Delete Node** button now deletes **all selected nodes at once** and no longer
+  shows a confirmation dialog (was: single node + Yes/No popup).
+
+## [01.08] - 2026-06-19
+### Added
+- **Lineage** tab — the **Node** panel now shows the selected node's **log history**
+  (read-only), loaded from the same record the File Manager tab's *Save Record*
+  writes (`records/<key>.json`). It is re-read from disk on node select and when
+  the Lineage tab regains focus, so entries stay in sync with the File Manager tab.
+  Shown only for nodes that map to a record (not for planned / out-of-root nodes).
+
 ## [01.06] - 2026-06-18
 ### Added
 - **One-click data-repo sync for distributed users.** The tool now ships a bundled

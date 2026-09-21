@@ -1,8 +1,11 @@
-# last Update date 2026. 05. 09
+# last Update date 2026. 06. 30
 # Python Script by Ji Hun Park
 
-# file_exporter_v01 V01.00
+# file_exporter_v01 V01.03
 # V01.00 : create
+# V01.01 : update unparent and parenting until
+# V01.02 : fix export error for world-root objects (no parent) + index alignment / comparison cleanup
+# V01.03 : verified in Maya (world-root export OK)
 
 
 import maya.cmds as cmds;
@@ -11,13 +14,13 @@ import copy
 from functools import partial
 from .utility import *
 
-import config
-from Framework.ui import JUN_mod_tsl, JUN_mod_radCol, JUN_mod_colorThem, JUN_mod_tfg, JUN_mod_omg
+from . import config   # 툴 폴더의 config.py (최상위 `config` 는 흔한 이름이라 충돌한다)
+from Framework.ui import JUN_mod_tsl, JUN_mod_radCol, JUN_mod_colorThem, JUN_mod_tfg, JUN_mod_omg, JUN_mod_menu
 
 
 class JUN_ToolUI_file_exporter:
     def __init__(self):
-        self.str_headTitle = "File exporter Tool V01.00"
+        self.str_headTitle = "File exporter Tool V01.03"
         self.str_winName = "Junny_win_file_exporter_tool_V01_00"
         self.win_width = 500;
         self.win_height = 600;
@@ -36,7 +39,7 @@ class JUN_ToolUI_file_exporter:
         self.color_all = colorThem__.as_dict()
         # set color them (close)
 
-        self.menu_cmd = "cmds.confirmDialog( title=\'About\', icon =\"information\", bgc ={}, button = \"OK\", messageAlign = \"center\", message=\' Written by Ji Hun Park. \\n Update date: 14-APR-2026\')".format(self.color_main)
+        self.menu_cmd = "cmds.confirmDialog( title=\'About\', icon =\"information\", bgc ={}, button = \"OK\", messageAlign = \"center\", message=\' Written by Ji Hun Park. \\n Update date: 30-JUN-2026\')".format(self.color_main)
 
         # custom
 
@@ -223,6 +226,7 @@ class JUN_ToolUI_file_exporter:
     
         cmds.menu( label='Help' );
         cmds.menuItem( label='About', command = self.menu_cmd);
+        JUN_mod_menu.add_common_items('Help', tool_file=__file__);
 
         cmds.columnLayout(adjustableColumn=True, 
                           columnAttach=('both', 5), 

@@ -12,8 +12,11 @@ UI 문자열/로그는 영어. 핸들러는 위젯에서 list[str] 를 뽑아 co
 
 import maya.cmds as cmds
 
+from Framework.core.maya_undo import undo_chunk
 from Framework.qt.qt import *
 from Framework.qt.maya_window import maya_main_window
+from Framework.qt.MOD_log_qt_v01 import JUN_mod_log_qt_v01
+from Framework.qt.MOD_menuBar_qt_v01 import JUN_mod_menuBar_qt_v01
 
 from ..config.version import VERSION, LAST_UPDATE
 from ..core import matching
@@ -65,8 +68,9 @@ class MainWindow(QWidget):
         root.addWidget(self._build_option_panel())
 
         # 로그
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
+        self.log_view = JUN_mod_log_qt_v01(
+            window_title="FKIK General Tool - Log",
+            object_name="JUN_A00190_FKIK_General_Tool_log_window")
         self.log_view.setFixedHeight(90)
         root.addWidget(self.log_view)
 
@@ -75,7 +79,7 @@ class MainWindow(QWidget):
         root.addWidget(footer)
 
     def _build_menu_bar(self):
-        bar = QMenuBar()
+        bar = JUN_mod_menuBar_qt_v01(tool_file=__file__)
         help_menu = bar.addMenu("Help")
         help_menu.addAction("About", self.show_about)
         return bar
@@ -245,31 +249,27 @@ class MainWindow(QWidget):
     # ==================================================================
 
     def on_setup_triangle(self):
-        cmds.undoInfo(openChunk=True)
-        try:
-            driver_setup.setup_triangle_drivers(self._fk_source_lists(), self.cage)
-            self._log("Triangle drivers set up.")
-        except Exception as exc:
-            self._warn("Set up triangle drivers failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+        with undo_chunk():
+            try:
+                driver_setup.setup_triangle_drivers(self._fk_source_lists(), self.cage)
+                self._log("Triangle drivers set up.")
+            except Exception as exc:
+                self._warn("Set up triangle drivers failed: {0}".format(exc))
 
     def on_setup_switch(self):
-        cmds.undoInfo(openChunk=True)
-        try:
-            fk_pose, ik_pose = driver_setup.create_switch_drivers(
-                self._ik_source_lists(), self._ctl_lists("mfk"), self._ctl_lists("mik"), self.cage)
+        with undo_chunk():
+            try:
+                fk_pose, ik_pose = driver_setup.create_switch_drivers(
+                    self._ik_source_lists(), self._ctl_lists("mfk"), self._ctl_lists("mik"), self.cage)
 
-            limbs = ["arm_l", "arm_r", "leg_l", "leg_r"]
-            for i, lb in enumerate(limbs):
-                self._set("mfk_{0}_pose".format(lb), fk_pose[i])
-                self._set("mik_{0}_pose".format(lb), ik_pose[i])
+                limbs = ["arm_l", "arm_r", "leg_l", "leg_r"]
+                for i, lb in enumerate(limbs):
+                    self._set("mfk_{0}_pose".format(lb), fk_pose[i])
+                    self._set("mik_{0}_pose".format(lb), ik_pose[i])
 
-            self._log("FK/IK switch drivers created.")
-        except Exception as exc:
-            self._warn("Drivers for FK IK switch failed: {0}".format(exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+                self._log("FK/IK switch drivers created.")
+            except Exception as exc:
+                self._warn("Drivers for FK IK switch failed: {0}".format(exc))
 
     # ==================================================================
     # 슬롯 : 매칭 / 베이크
@@ -277,16 +277,14 @@ class MainWindow(QWidget):
 
     def on_match(self, use_ik):
         side = "IK" if use_ik else "FK"
-        cmds.undoInfo(openChunk=True)
-        try:
-            n = matching.run_match_bake(
-                self._pairs("mfk"), self._pairs("mik"),
-                self._enabled_limbs(), use_ik, frame_range=None)
-            self._log("Match {0}: {1} control(s) matched at current frame.".format(side, n))
-        except Exception as exc:
-            self._warn("Match {0} failed: {1}".format(side, exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+        with undo_chunk():
+            try:
+                n = matching.run_match_bake(
+                    self._pairs("mfk"), self._pairs("mik"),
+                    self._enabled_limbs(), use_ik, frame_range=None)
+                self._log("Match {0}: {1} control(s) matched at current frame.".format(side, n))
+            except Exception as exc:
+                self._warn("Match {0} failed: {1}".format(side, exc))
 
     def on_bake(self, use_ik):
         side = "IK" if use_ik else "FK"
@@ -295,16 +293,14 @@ class MainWindow(QWidget):
         if end < start:
             self._warn("End frame is before start frame.")
             return
-        cmds.undoInfo(openChunk=True)
-        try:
-            n = matching.run_match_bake(
-                self._pairs("mfk"), self._pairs("mik"),
-                self._enabled_limbs(), use_ik, frame_range=(start, end))
-            self._log("Bake {0}: {1} control(s) baked over {2}-{3}.".format(side, n, start, end))
-        except Exception as exc:
-            self._warn("Bake {0} failed: {1}".format(side, exc))
-        finally:
-            cmds.undoInfo(closeChunk=True)
+        with undo_chunk():
+            try:
+                n = matching.run_match_bake(
+                    self._pairs("mfk"), self._pairs("mik"),
+                    self._enabled_limbs(), use_ik, frame_range=(start, end))
+                self._log("Bake {0}: {1} control(s) baked over {2}-{3}.".format(side, n, start, end))
+            except Exception as exc:
+                self._warn("Bake {0} failed: {1}".format(side, exc))
 
     # ==================================================================
     # 슬롯 : 세팅 저장 / 로드

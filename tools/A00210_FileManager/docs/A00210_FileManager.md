@@ -2,8 +2,12 @@
 
 Maya 씬 파일(`.mb` / `.ma`)의 **버전·작업 기록 추적** 파이프라인 툴.
 경로를 지정하면 그 폴더의 Maya 파일들이 **어떤 작업인지(작업자·기록)** 와 **썸네일** 로 보이고,
-기록을 **git 으로 push/pull** 해 **어느 PC 에서나 동일하게 로그를 추적**한다.
-**원본 mb/ma 는 push 대상이 아니다.**
+기록을 공유해 **어느 PC 에서나 동일하게 로그를 추적**한다. **원본 mb/ma 는 공유 대상이 아니다.**
+
+기록을 공유하는 방식은 **Source Mode** 로 고른다(v01.23):
+- **Remote (Git)** — 중앙 git 데이터 리포를 **Pull / Push** 로 동기화(기존 동작).
+- **Local (Shared / NAS)** — NAS 같은 **공유 폴더를 git 없이 직접** 읽고 쓴다. 팀이 NAS 를 공유할 때
+  매번 push/pull 하지 않고 **파일 서버가 동기화를 담당**하게 하는 방식.
 
 > 이 툴은 Maya 안에서 도는 툴이 아니라 `A00080_KWI_creator_V02` 처럼 **Windows 에서 독립 실행되는
 > PySide6 앱** 이다. Maya 설치/실행 없이 동작한다.
@@ -15,9 +19,13 @@ Maya 씬 파일(`.mb` / `.ma`)의 **버전·작업 기록 추적** 파이프라�
 | 개념 | 설명 |
 |------|------|
 | **Project Root** | Maya 파일들이 모여 있는 작업 루트. 기록 키(key)를 이 기준 **상대경로**로 만든다. |
-| **Store Repo** | 기록(JSON)·썸네일(PNG)을 모아두는 **중앙 git 데이터 리포**(예: `JUN_FileManager_data`). |
+| **Source Mode** | 기록·썸네일을 어디서 읽고 쓸지: **Remote (Git)** = 중앙 git 데이터 리포(Pull/Push), **Local (Shared / NAS)** = 공유 폴더 직접 사용(git 미사용). 프로파일별로 저장(v01.23). |
+| **Store Repo / Shared Folder** | 데이터 스토어 폴더 입력 **한 칸**(v01.26). Source Mode 에 따라 라벨/설명이 바뀐다 — Remote 면 **Store Repo**(중앙 git 데이터 리포의 로컬 clone, 예: `JUN_FileManager_data`), Local 이면 **Shared Folder**(git 없이 직접 쓰는 공유/NAS 폴더). 두 모드의 경로는 프로파일에 각각(`store_dir`/`local_dir`) 저장돼, 모드를 오가도 상대 경로가 지워지지 않는다. |
 | **key** | `Project Root` 기준 상대경로(예: `chars/charA_rig.mb`). PC 가 달라도(예: `P:/proj` vs `D:/work`) **같은 파일이 같은 기록**에 매핑된다. |
-| **원본 제외** | 원본 mb/ma 는 Store Repo 에 애초에 들어가지 않는다(+ `.gitignore` 로 `*.mb`/`*.ma` 이중 차단). |
+| **원본 제외** | 원본 mb/ma 는 데이터 스토어에 애초에 들어가지 않는다(git 모드는 `.gitignore` 로 `*.mb`/`*.ma` 이중 차단). |
+
+> **데이터 스토어 폴더**(records/thumbs/lineage/path_structures 의 부모)는 Source Mode 에 따라
+> Store Repo(git) 또는 Shared Folder(local) 가 된다. 모든 탭이 활성 모드의 폴더를 자동으로 따른다.
 
 스토어 레이아웃:
 ```
@@ -27,8 +35,10 @@ JUN_FileManager_data/        # git repo
 └── thumbs/<key>.png         # thumbs/chars/charA_rig.mb.png
 ```
 
-PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **로컬 prefs** 에 저장한다:
-`%USERPROFILE%/.jun_filemanager/prefs.json` (push 대상 아님).
+PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **로컬 prefs** 에 저장한다.
+세팅은 **Profile(환경별 묶음)** 단위로 저장된다(v01.20): `%USERPROFILE%/.jun_filemanager/profiles/<name>.json`
++ `active.json`(마지막 활성 프로파일) — 모두 push 대상 아님. 구버전 단일 `prefs.json` 은 첫 실행 시
+`Default` 프로파일로 1회 마이그레이션된다(원본은 `prefs.json.bak` 보존).
 
 ---
 
@@ -37,29 +47,39 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 - **개발 실행**: `python JUN_All/tools/A00210_FileManager/launch.py`
 - **exe 빌드**: 툴 폴더의 `build_exe.bat`(PyInstaller, `launch.spec`) → `dist/A00210_FileManager.exe`
 - 필요 패키지: `PySide6`, `pyinstaller`. git sync 는 **시스템 git(PATH)** 을 사용한다(별도 패키지 없음).
+- **작업표시줄 아이콘(v01.27)**: `icon/A00210_FileManager.ico`(16~256px 멀티 사이즈)를 앱/창 아이콘으로 쓴다.
+  터미널에서 `python launch.py` 로 띄우면 프로세스가 `python.exe` 라 기본으로 python 아이콘이 뜨는데,
+  `launch.py` 가 Windows **AppUserModelID**(`Dnable.JUN.A00210.FileManager`)를 지정해 **이 앱 아이콘**이
+  작업표시줄에 뜨도록 한다. 아이콘 경로 해석은 dev·exe 양쪽 대응(`app/config/app_meta.py`).
 
 ---
 
 ## 3. 화면 구성
 
 ```
+┌ Profile ──────────────────────────────────────────────┐
+│ Profile [ Work        ▾]   [New] [Rename] [Delete]     │
+└────────────────────────────────────────────────────────┘
 ┌ Settings ─────────────────────────────────────────────┐
+│ Source Mode  [ Remote (Git) ▾]                         │
 │ Project Root [............] [Browse]                   │
-│ Store Repo   [............] [Browse]                   │
+│ Store Repo   [............] [Browse]   ← 라벨은 모드에  │
+│  (Local 모드에선 'Shared Folder' 로 바뀜)   따라 전환   │
 │ Scan Dir     [............] [Browse]                   │
-│                            [Recursive]      [ Scan ]   │
+│  [Recursive] [Show Recorded Only] [File Types ▾]  [Scan]│
 │ Remote [..] Branch [..] Author [.....]  [Save Settings]│
 └────────────────────────────────────────────────────────┘
+ Name filter [................................]  [ Filter ]
 ┌ 파일 목록 ───────────┐ ┌ 상세 ───────────────────────┐
 │ File / Author /      │ │ [ thumbnail 320x180 ]        │
 │ Thumb / Record / 수정│ │ [Capture Region][Load Image] │
-│ ...                  │ │ Author [...........]         │
-│                      │ │ Log history (read only)      │
-│                      │ │ New note [...]               │
-│                      │ │ [Add Log Entry][Save Record] │
+│ (우클릭 →            │ │ Author [...........]         │
+│  Show in File        │ │ Log history (ro) [Edit][Expand]│
+│  Explorer)           │ │ New note [...]               │
+│ ...                  │ │ [Add Log Entry][Save Record] │
 └──────────────────────┘ └──────────────────────────────┘
 ┌ Git Sync ────────────────────────────────────────────┐
-│ [ Pull ] [ Push ]            status...                 │
+│ [ Pull ] [ Push ]            status...                 │   ← local 모드에선 비활성
 └────────────────────────────────────────────────────────┘
 ( 하단 로그 출력 )
 ```
@@ -68,11 +88,34 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 
 ## 4. 사용 흐름
 
-1. **설정**: `Project Root`, `Store Repo`, `Remote`/`Branch`, `Author` 를 채우고 **Save Settings**.
+1. **설정**: `Source Mode` 를 고른 뒤 `Project Root`·`Author` 와 데이터 폴더 경로를 채우고 **Save Settings**.
+   데이터 폴더 입력은 한 칸이며 모드에 따라 라벨이 바뀐다(v01.26).
+   - **Remote (Git)**: 데이터 폴더 칸(**Store Repo**)에 로컬 clone 경로, `Remote`/`Branch`(필요 시 `Remote URL`)를 채운다.
+   - **Local (Shared / NAS)**: 데이터 폴더 칸(**Shared Folder**)에 공유/NAS 폴더만 지정하면 된다(git 입력·Pull/Push 비활성).
+     자세한 흐름은 **5-C** 참고.
+   - 두 모드 경로는 각각 기억되므로 모드를 바꿔도 앞서 넣어둔 경로가 사라지지 않는다.
    - 처음이라면 **Pull**(또는 Push) 시 Store Repo 가 git repo 가 아니면 자동으로 `git init` + 스켈레톤(`records/`,
      `thumbs/`, `.gitignore`)을 만든다. 원격에서 받아오려면 Store Repo 를 비운 폴더로 두고 원격 URL 을 사용한다.
-2. **스캔**: `Scan Dir` 지정(보통 Project Root 하위) → **Scan**. `.mb`/`.ma` 목록이 뜬다.
+   - **Profile(v01.20)**: 상단 **Profile** 그룹의 콤보에서 환경(예: Home/Work)을 고르면 그 프로파일의 모든
+     세팅(Source Mode·Project Root·Store Repo·Shared Folder·Scan Dir·Remote·Branch·Remote URL·Author·
+     Recursive·Show Recorded Only)이 한 번에 로드된다. **New**(현재 세팅으로 새 프로파일)·**Rename**·**Delete**(최소 1개 유지). 프로파일을
+     전환하면 현재 입력값이 **자동 저장**된 뒤 새 프로파일이 로드되고, Lineage/Path Structure 목록도 새
+     Store Repo 기준으로 새로고침된다. 마지막 활성 프로파일은 다음 실행 때 복원된다.
+2. **스캔**: `Scan Dir` 지정(보통 Project Root 하위) → **Scan**. **모든 확장자**의 파일 목록이 뜬다
+   (`.mb`/`.ma` 뿐 아니라 `.fbx`/`.obj`/`.png` 등도 포함, v01.14).
    - `Thumb`/`Record` 열의 `O` 는 썸네일·기록 존재 표시. Project Root 밖 파일은 회색(`out of project root`)으로 비활성.
+   - **Recursive**: 하위 폴더까지 재귀 스캔.
+   - **Show Recorded Only**: 기록(Save Record)이 있는 파일만 남긴다 — 이 툴로 관리 중인 파일만 추리는 용도.
+   - **File Types ▾**: 스캔에서 발견된 확장자 목록 중 **표시할 것만 체크**(All 포함). 메뉴는 여러 개를 연속
+     토글해도 닫히지 않고, 버튼 라벨에 선택 요약(`File Types: mb, ma`)이 보인다.
+   - **Name filter**: 파일 목록 위 입력란에 키워드를 넣고 **Filter**(또는 Enter) — **제목에 키워드가 포함된
+     파일만** 표시(대소문자 무시), 비우면 전체.
+   - 위 필터들은 **재스캔 없이 즉시 중첩 적용**된다(Recorded/Types 상태는 prefs 에 저장).
+   - **우클릭 → Show in File Explorer**: 목록의 파일을 우클릭하면 그 파일을 **탐색기에서 선택 상태로** 연다.
+   - 파일 선택 후 상세 패널의 **Log history** 가 길면 **Expand** 로 큰 창에서 볼 수 있다.
+   - **Edit(v01.21)**: **Log history** 헤더의 **Edit** 버튼으로 *Edit Log History* 창을 열어 과거 기록의
+     **작업자/메모를 수정**하거나 항목을 **삭제**한다(타임스탬프는 보존). OK 후 **Save Record** 로 저장.
+     항목 단위 구조 편집이라 타임스탬프·항목 경계가 깨지지 않는다.
 3. **기록 작성**: 파일을 선택 → 우측에서 **Author** 입력, **New note** 작성 후 **Add Log Entry**(타임스탬프 자동) →
    **Save Record**. `records/<key>.json` 이 생성/갱신된다.
 4. **썸네일**: **Capture Region** → 화면이 **살짝 어두워지며(실제 화면은 비쳐 보임)** 드래그로 영역 선택
@@ -94,6 +137,9 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
   `~/.jun_filemanager/JUN_FileManager_data` 에 **자동 clone** 한 뒤 pull 한다. 사용자는 **Pull 한 번**이면 된다.
 - **Settings** 의 `Store Repo`/`Remote`/`Branch`/`Remote URL` 은 번들 기본값으로 **미리 채워진다**(리포를
   포크/이전했다면 `Remote URL`/`Branch` 만 바꿔 Save). 데이터 리포 기본 브랜치는 **`master`**.
+- **Branch** 입력은 **편집 가능한 드롭다운** — 펼치면 Store Repo 의 실제 git 브랜치(로컬 + 원격추적, 중복
+  제거)를 보여줘 올바른 이름을 고를 수 있다(직접 타이핑도 가능). `main`/`master` 혼동 같은 브랜치명 불일치로
+  생기는 `src refspec ... does not match any` push 오류를 줄인다.
 - 이후 Push/Pull 은 기존과 동일하게 같은 중앙 리포로 동기화된다.
 
 > **인증 주의**: 중앙 데이터 리포가 **private** 이면, clone 하려면 사용자에게 **그 GitHub 리포 접근 권한 +
@@ -103,6 +149,26 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 > pull 된다(로컬 파일/썸네일 링크 표시에만 영향).
 
 > 여러 PC 가 같은 파일 기록을 동시에 수정하면 git 충돌이 날 수 있다. **Push 전에 Pull** 하는 습관을 권장한다.
+
+### 5-C. Local (Shared / NAS) 모드 — git 없이 공유 폴더로 협업 (v01.23)
+
+팀이 **NAS / 공유 드라이브**를 함께 쓸 때, 매번 git push/pull 하는 대신 **공유 폴더를 데이터 스토어로 직접**
+쓰는 방식. 동기화는 **파일 서버(NAS)** 가 담당한다.
+
+- **설정**: Settings 의 **Source Mode** 를 **Local (Shared / NAS)** 로 바꾸고, **Shared Folder** 에
+  공유 경로(예: `\\NAS\team\JUN_FileManager_data` 또는 매핑 드라이브 `Z:\...JUN_FileManager_data`)를
+  지정한다. git 입력(`Store Repo`/`Remote`/`Branch`/`Remote URL`)과 **Pull / Push** 버튼은 자동 비활성된다.
+- **읽기/쓰기**: Scan·Save Record·썸네일·Lineage·Path Structure 모두 그 공유 폴더의 `records/`·`thumbs/`·
+  `lineage/`·`path_structures/` 에 **바로** 읽고 쓴다. 동료가 저장한 기록은 **Scan 으로 새로고침**해 본다
+  (Pull 불필요).
+- **자동 폴더 생성**: **빈 공유 폴더**라도 첫 저장 시 `records/`·`thumbs/`(및 필요한 하위 폴더)가 자동으로
+  만들어진다 — 별도 초기화 불필요.
+- **프로파일 분리 권장**: Source Mode·경로는 **프로파일별로 저장**되므로, 회사=Local(NAS)·집=Remote(Git)
+  처럼 프로파일을 나눠 쓰면 한 번의 전환으로 환경이 바뀐다.
+
+> **주의**: 여러 명이 **같은 파일 기록을 동시에** 저장하면 마지막 저장이 이긴다(git 같은 병합/충돌 처리
+> 없음). 같은 에셋을 동시에 만지는 경우는 드물지만, 협업 규칙(담당 분리)을 권장한다. 원본 mb/ma 는 여기에도
+> 저장하지 않는다(기록/썸네일/계보만).
 
 ---
 
@@ -126,6 +192,24 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
   자유 이동(위치 저장). **색상은 토폴로지 레인에서 자동 계산** — 브랜치는 다른 색 컬럼, 병합은 레인 수렴.
 - **관계 입력**: **Connect Mode** 를 켜고 노드(부모) → 노드(자식) 로 드래그해 선을 긋는다. 자기 연결·중복·
   **순환은 자동 거부**.
+- **Reference 점선 엣지(v01.16)**: 한 마야 파일이 다른 파일을 **reference 로 불러오는 관계**를 계보와 별도로
+  표현한다. **Connect Mode** 를 켠 상태에서 *Connect Mode* 버튼 옆 **엣지 종류 드롭다운**을 **`Reference
+  (dashed)`** 로 바꾸고 **참조 대상(불러와지는 파일) → 참조하는 파일** 로 드래그하면 **회색 점선 화살표**(채운
+  삼각 화살촉)가 생긴다. reference 는 계보(parents)와 **독립** — **레인/색/Auto Layout 에 영향을 주지 않고**
+  자체 순환 검사를 가진다. 그래프 JSON 에 노드별 `references` 목록으로 저장(구버전 그래프도 그대로 로드).
+  점선 엣지도 클릭 선택 후 Delete 로 지운다. (드롭다운 기본값 `Lineage (parent)` = 기존 실선 계보.)
+- **노드/엣지 색 수동 지정(v01.16~17)**: 러버밴드로 **여러 노드·엣지를 선택**한 뒤 **`Set Color...`**(색
+  선택창)로 **선택 대상 전부의 색을 한 번에** 바꾼다. **`Reset Color`** 는 기본색으로 되돌린다(노드=레인색,
+  계보 엣지=자식 레인색, reference 엣지=회색). 노드 수동색은 노드별 `color`, **엣지 수동색은 그래프 JSON
+  의 `edge_colors`**(`kind:src>dst` 키)로 저장된다. 끝점 노드를 지우면 관련 엣지 색도 정리된다. (v01.16 은
+  노드 색만, **v01.17 부터 엣지 색도** 지정 가능.)
+- **겹치는 화살표 분리(v01.17)**: 같은 두 노드 사이에 **계보 + reference 화살표가 동시에** 있으면 예전엔 같은
+  앵커로 **포개져** 보였다. 이제 같은 노드쌍 엣지들을 **가로로 균등하게 벌려** 각 화살표·화살촉이 구분된다.
+- **엣지 종류 즉시 변환(v01.18)**: 화살표(엣지)를 **선택한 상태에서** *Connect Mode* 옆 **엣지 종류 드롭다운**
+  을 `Lineage (parent)` / `Reference (dashed)` 로 바꾸면 **선택된 화살표가 그 종류로 즉시 변환**된다(방향은
+  유지, 모양도 실선 빈 V ↔ 점선 채운 삼각으로 바로 바뀜). 내부적으로 계보(`parents`)와 `references` 사이로
+  관계를 옮기고, 지정해 둔 엣지 색도 함께 따라간다. 변환이 **순환을 만들면 거부**된다. (엣지를 선택하지 않은
+  상태에서는 예전처럼 *새로 그릴* 엣지의 종류만 정한다.)
 - **버전업 / 브랜치 지정(v01.03)**: 노드를 선택하면 **Node** 패널의 **Relation to parent** 에서 부모와의
   관계를 고른다 — `Auto`(토폴로지 기본: 생성 순서상 첫 자식이 메인 라인) / **Version-up (main line)**
   (부모와 **같은 색** = 버전업 라인 상속) / **Branch (variation)**(강제로 **새 레인 = 다른 색**). 같은
@@ -133,10 +217,25 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
   (루트 노드처럼 부모가 없으면 비활성.) 색은 항상 관계에서 파생되므로 의미와 색이 어긋나지 않는다.
 - **캔버스 조작(v01.03)**: 마우스 **휠로 줌**(커서 기준, 0.15x~4.0x), **중간 버튼 드래그로 화면 이동(pan)**.
   좌클릭(선택·노드 드래그)·Connect Mode 와 충돌하지 않는다.
-- **노드 우클릭 메뉴(v01.04)**: 노드를 우클릭하면 **Reveal in File Explorer** — 그 노드 파일이 있는 폴더를
-  탐색기로 열고 **파일을 선택(하이라이트)** 한다(Windows `explorer /select,`). 실제 경로가 해석될 때만
-  활성(노드에 project-relative key 있음 + Project Root 설정됨 + 파일이 실제 존재) — **planned·루트 밖·
-  경로에서 사라진 파일**은 비활성. 이후 우클릭 액션(Open File, Copy Path 등)을 계속 늘릴 수 있는 구조.
+  - **팬 범위 무제한(v01.15)**: 예전엔 노드 영역 바깥 200px 에서 팬이 막혔다(스크롤바가 sceneRect 에 갇힘).
+    이제 콘텐츠 둘레에 한 뷰포트 크기 이상의 여백을 두고, 가장자리로 끌수록 sceneRect 가 따라 넓어져
+    노드 바깥으로도 자유롭게 이동할 수 있다(다음 렌더에서 콘텐츠 기준으로 다시 줄어 영구 부풀지 않음).
+- **노드 우클릭 메뉴(v01.04, v01.19 갱신)**: 노드를 우클릭하면 **Reveal in File Explorer**. 파일이 **이
+  PC 에 실제로 있으면** 예전처럼 탐색기로 폴더를 열고 **파일을 선택(하이라이트)** 한다(Windows
+  `explorer /select,`, 팝업 없음). 파일이 **로컬에 없으면**(예: 다른 PC 에서 **A00211_RefLineage** 로 만든
+  그래프) 그냥 실패하지 않고 그 노드 파일의 **경로를 팝업**으로 보여준다(마우스/키보드로 선택·복사 가능).
+  메뉴는 노드에 **project-relative key 가 있으면 활성**(planned·루트 밖 노드만 비활성) — 이전처럼 "파일이
+  로컬에 없다"는 이유로 회색 처리되지 않는다.
+- **로그 기록 표시(v01.08)**: 노드를 선택하면 **Node** 패널 아래 **Log history (from record)** 에 그 노드
+  파일의 작업 기록이 보인다 — **File Manager 탭의 Save Record 가 쓰는 `records/<key>.json` 을 그대로 읽어**
+  같은 내용을 표시(읽기 전용). 노드 선택 시·Lineage 탭으로 돌아올 때마다 디스크에서 다시 읽어 **File Manager
+  탭과 동기화**된다. record 가 매핑되는 노드에만 표시(planned·루트 밖 노드는 안내문).
+- **노드·연결 삭제 / 다중 선택(v01.09)**: 노드뿐 아니라 **연결선(엣지)도 클릭으로 선택**해 지울 수 있다
+  (얇은 곡선도 잘 잡히게 hit 영역을 넓혔고, 선택된 엣지는 흰색·굵게 강조). **Delete/Backspace** 로
+  현재 선택(노드·연결 혼합)을 **확인 팝업 없이** 삭제 — 연결 삭제는 자식의 그 부모 링크만 제거하고,
+  노드 삭제는 다른 노드의 고아 참조까지 정리한다. **빈 캔버스를 드래그하면 러버밴드 다중 선택**(사각형에
+  **일부라도 걸친** 노드·연결 선택 — 전체를 감쌀 필요 없음, v01.10 부터 intersect). Connect Mode 중에는 선 긋기에 집중하도록 러버밴드를 끄고, 끄면 다시 켜진다.
+  **Delete Node** 버튼도 선택된 **여러 노드를 한 번에**(팝업 없이) 삭제한다.
 - **Auto Layout**: 레인(컬럼) × 토폴로지(행) 로 자동 정렬. 이후 드래그한 위치도 그대로 저장된다.
 - **저장 단위**: 에셋별 **이름 붙인 그래프** — `<store_dir>/lineage/<name>.json`. 목록에서 New/Save/
   Delete. 기존 **Push/Pull 로 자동 git 동기화**(records/thumbs 와 함께).
@@ -147,7 +246,7 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 3. 노드 추가 방법 3가지:
    - **Add Node from Scan...**: 폴더를 재귀 스캔(**모든 포맷**)해 목록에서 골라 추가. 다이얼로그 상단
      **Filter** 에 확장자(예: `mb ma fbx obj`)를 넣어 목록을 좁힐 수 있다(빈칸 = 전체). **Check/Uncheck
-     Visible** 로 보이는 항목 일괄 토글.
+     Visible** 로 보이는 항목 일괄 토글. v01.31: Shift / Ctrl 로 여러 행을 골라 체크박스 한 번(또는 `Space`)으로 함께 켜고 끈다(Framework 공용 동작 [`MOD_checkList_qt`](Framework_MOD_checkList_qt.md)).
    - **Add File...**: 임의의 단일 파일을 포맷 무관하게 바로 노드로 추가.
    - **Add Planned Node**: 아직 없는 파일("제작 예정") placeholder 추가 후 **Node** 패널에서 이름 변경.
    - 스캔/파일 추가 시 파일이 Project Root 안이면 기존 record/썸네일에 자동 링크된다(밖이면 링크 없이 추가).
@@ -160,11 +259,12 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 
 ---
 
-## 4-C. Path Structure 탭 — 폴더 구조 템플릿 (v01.01, 선택 기록 v01.07)
+## 4-C. Path Structure 탭 — 폴더 구조 템플릿 (v01.01, 선택 기록 v01.07, 깊이·선택 재생성 v01.24, Rename·Recreate To v01.28, 파일 재생성 v01.29)
 
-베이스 폴더의 **하위 폴더 구조**를 JSON 으로 저장(`<store_dir>/path_structures/<name>.json`, git 동기화)하고,
-다른 PC 의 `Project Root` 아래에 **폴더만 재생성**한다(파일 미생성). 베이스는 project_root 상대경로로
-저장되어 PC 가 달라도 동작한다.
+베이스 폴더의 **하위 폴더 구조**(v01.29~ **파일 목록도**)를 JSON 으로 저장
+(`<store_dir>/path_structures/<name>.json`, git 동기화)하고, 다른 PC 에서 **원하는 목적지 폴더**
+(`Recreate To`) 안에 재생성한다. 베이스는 project_root 상대경로(`base_rel`)로도 저장되어 목적지를
+자동 제안하는 데 쓰인다.
 
 ```
 ┌ Save Structure ───────────────────────────────────────┐
@@ -176,11 +276,19 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 │ │ [v] 02_output                                      │ │
 │ └──────────────────────────────────────────────────┘ │
 │ Name [................]                                │
-│ [ ] Recursive (capture full nested tree)  [Capture][Save]│
+│ Capture Depth [1] [v] Include files    [Capture][Save] │  ← Include files (v01.29, 기본 켬)
 └────────────────────────────────────────────────────────┘
 ┌ Saved Structures ─────────────────────────────────────┐
-│ (저장된 구조 목록)   [Refresh][Recreate][Delete]      │
-│ Preview (트리뷰)                                       │
+│ (저장된 구조 목록)                                     │
+│ [Refresh][Rename][Delete]              [ Recreate ]   │  ← Recreate=녹색, 우측 정렬
+│ Recreate To [........................] [Browse...]    │  ← 목적지 베이스 폴더 (v01.28)
+│ Preview       Depth[All] [v] Create files [Expand]    │  ← Create files (v01.29, 기본 켬)
+│ ┌──────────────────────────────────────────────────┐ │
+│ │ [v] 00_asset                                       │ │  ← 폴더·기록된 파일 = 체크박스
+│ │   [v] char                                         │ │     (체크 해제 = Recreate 제외)
+│ │   [v] test.ma                                      │ │  → test.ma__ 로 생성
+│ │ [ ] 02_output                                      │ │
+│ └──────────────────────────────────────────────────┘ │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -188,14 +296,74 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 
 - **Folders to record**: Base 의 **최상위 하위 폴더 이름**이 체크박스와 함께 리스트업된다(파일 무시).
   Base 를 고르거나 바꾸면(또는 **Scan**) 목록이 채워지고, 재스캔해도 기존 체크 상태는 이름 기준으로 보존된다.
+  v01.31: Shift / Ctrl 로 여러 폴더를 골라 체크박스 한 번(또는 `Space`)으로 함께 켜고 끈다.
 - **All** 체크박스: 전체 폴더를 한 번에 선택/해제(= 전체 기록). 모든 항목이 체크돼 있을 때만 켜진 상태로 표시된다.
-- **Recursive**: 체크된 최상위 폴더의 **하위 트리 전체**까지 캡처(끄면 최상위 폴더만).
-- **Capture**: 체크된 폴더만 모아 (미저장 상태로) Preview 에 트리로 보여준다. 폴더가 있는데 하나도
-  체크 안 하면 경고. → **Name** 입력 후 **Save** 로 JSON 저장(File Manager 탭의 **Push** 로 동기화).
-- **Recreate**: 저장된 구조를 선택해 현재 `Project Root` 아래에 폴더를 생성(이미 있으면 건너뜀).
+- **Capture Depth**(v01.24, 기존 *Recursive* 대체): base 기준 **몇 단계 깊이까지 캡처**할지 결정한다.
+  **1 = 최상위 폴더만**, `2` = 그 아래 한 단계 더, **0 = All**(전체 트리). 기본값 1.
+- **Include files**(v01.29, 기본 **켬**): 폴더뿐 아니라 **파일 이름도 기록**한다(JSON 의 `files`).
+  **이름만 담고 내용은 담지 않는다** — 원본 mb/ma 를 공유하지 않는다는 이 툴의 원칙 그대로다.
+  깊이·체크리스트 규칙은 폴더와 동일하니, `Capture Depth = 1` 이면 **base 바로 아래 파일만** 기록된다.
+  단, **base 직속 파일은 최상위 폴더 체크리스트와 무관하게 항상 포함**된다(어느 최상위 폴더에도 속하지
+  않는, base 폴더 자체의 내용물이라서).
+- **Capture**: 체크된 폴더를 지정 깊이까지 모아 (미저장 상태로) Preview 트리에 보여준다. 폴더가 있는데
+  하나도 체크 안 하면 경고. → **Name** 입력 후 **Save** 로 JSON 저장(File Manager 탭의 **Push** 로 동기화).
 
-**사용 흐름**: Base 지정 → (Scan) → 기록할 폴더 체크(또는 **All**) → (필요 시 Recursive) →
-**Capture** → **Name** 입력 → **Save** → **Push**. 받는 PC 에서 같은 구조 선택 → **Recreate**.
+**Preview 트리뷰(v01.24)**: 선택한(또는 방금 Capture 한) 구조를 **트리 위젯**으로 보여준다
+(A00240 PathTool 의 *Tree* 탭과 동일한 형태).
+
+- **Depth**: Preview 에 보이는 **동시에 Recreate 가 생성하는** 폴더/파일 깊이 제한(0 = All).
+- **Create files**(v01.29, 기본 **켬**, 구 *Show files* 대체): 구조에 **기록된 파일**을 트리에 보여주고
+  **Recreate 가 그 파일들을 생성**한다. Depth 와 같은 규칙 — **트리에 보이는 것이 만들어지는 것**이라,
+  끄면 트리에서도 사라지고 생성도 안 된다(안 보이는데 만들어지는 항목은 없다).
+  → 생성 규칙은 아래 **"파일 재생성"** 참고.
+- **Expand**: 같은 트리를 **큰 창**으로 연다. 큰 창에서 바꾼 체크 상태는 탭에 그대로 반영된다.
+- 각 **폴더·기록된 파일 항목의 체크박스**: 체크를 **해제하면 Recreate 에서 제외**된다(루트=base 는 항상 생성).
+  단, 체크된 하위 폴더가 필요로 하는 **상위 폴더는 자동 생성**된다.
+- **다중 선택 일괄 토글**: 트리에서 **Shift/Ctrl** 로 여러 행을 선택한 뒤 선택된 항목 중 하나의
+  체크박스를 누르면 **선택된 항목 전체가 동시에 체크/해제**된다(폴더·파일 모두).
+
+- **Recreate To**(v01.28): 재생성 **목적지 베이스 폴더**. 체크된 폴더가 **이 폴더 바로 안**에 생성된다.
+  구조를 선택하면 `<Project Root>/<base_rel>`(= 기존 v01.24 동작과 동일한 경로)로 **자동 채워지며**,
+  직접 입력하거나 **Browse** 로 **아무 폴더로나 바꿀 수 있다**. 목적지가 File Manager 탭의 `Scan Dir` 인지
+  이 탭의 `Base Folder`(캡처 소스)인지 헷갈리던 문제를 이 칸이 없앤다 — 생성될 경로가 항상 눈에 보인다.
+  목적지 폴더가 아직 없으면 만들지 확인을 묻는다.
+- **Recreate**(v01.24, v01.28~ 우측 정렬·녹색): 저장된 구조를 선택해 **`Recreate To` 폴더 안**에,
+  **Depth 이내 + 체크된 폴더만** 생성한다(이미 있으면 건너뜀). 실제로 폴더를 **생성**하는 버튼이라
+  Refresh/Rename/Delete 와 색·위치로 구분된다.
+- **Rename**(v01.28): 선택한 저장 구조의 이름을 바꾼다(JSON 파일명 + 내부 `name` 동기화). 이미 있는
+  이름과 충돌하면 거부. 로컬 변경이므로 File Manager 탭의 **Push** 로 동기화한다.
+
+**사용 흐름**: Base 지정 → (Scan) → 기록할 폴더 체크(또는 **All**) → **Capture Depth** 지정 →
+(**Include files** 확인) → **Capture** → **Name** 입력 → **Save** → **Push**. 받는 PC 에서 같은 구조 선택 →
+(**Recreate To** 확인/변경 · **Depth** 조절 · **Create files** 확인 · 필요 없는 항목 체크 해제) → **Recreate**.
+
+> 구버전(이전 저장분)도 그대로 열린다: `recursive: true` → Depth **All**, `recursive: false` → Depth **최상위**.
+> `files` 키가 없는 구버전 JSON 은 **파일 목록이 빈 것**으로 읽혀 **폴더만 재생성**된다(기존 동작 유지).
+
+### 파일 재생성 (v01.29)
+
+재생성되는 파일은 **0 바이트 빈 파일**이고, 이름 끝에 **`__` 표식**이 붙는다.
+
+| 원본 | 재생성 결과 |
+|------|-------------|
+| `test.ma` | `test.ma__` |
+| `char_rig_v03.mb` | `char_rig_v03.mb__` |
+| `test.ma__` (이미 표식이 붙은 것) | `test.ma__` (덧붙이지 않음) |
+
+- **왜 이름을 바꾸는가**: 구조를 재생성한 자리에 `test.ma` 가 그대로 생기면 **내용이 빈 껍데기를 진짜
+  씬 파일로 오해**하기 쉽다. 확장자 **뒤에** 표식을 붙이면 원래 이름을 눈으로 그대로 읽으면서도
+  탐색기·DCC 가 이 파일을 씬으로 열려 하지 않는다. "원본이냐 생성물이냐"가 이름만으로 구분된다.
+- **표식은 중복되지 않는다**: 재생성된 트리를 다시 Capture → Recreate 해도 `____` 로 늘어나지 않는다.
+- **기존 파일은 절대 건드리지 않는다**: 같은 이름의 파일이 이미 있으면 **덮어쓰거나 비우지 않고**
+  "already existed" 로만 집계한다(배타적 생성 `open(..., "x")` — 검사와 생성 사이의 경쟁 상태에서도
+  기존 내용이 날아가지 않는다).
+- **파일의 부모 폴더는 필요하면 자동 생성**된다(폴더를 체크 해제했거나 Depth 로 잘렸어도).
+- 결과는 로그와 완료 대화상자에 **폴더/파일 수를 따로** 표시한다
+  (`N folder(s) created, M existed; P file(s) created, Q existed`).
+
+> **주의**: 기록된 파일이 없는 구조(구버전, 또는 *Include files* 를 끄고 저장)에서 **Create files** 를
+> 켜면, 트리는 대신 **base 폴더의 실제 파일**을 **회색·체크박스 없이** 보여준다. 참고용 표시일 뿐
+> Recreate 대상이 아니라는 뜻이다.
 
 ---
 
@@ -203,7 +371,7 @@ PC 마다 다른 절대경로·작업자명은 git 으로 공유하지 않고 **
 
 ```
 A00210_FileManager/
-├── launch.py            # main(): QApplication → ThemeManager(blue_dark) → MainWindow → exec
+├── launch.py            # main(): QApplication → ThemeManager(green_dark, 파이프라인/유틸 카테고리) → MainWindow → exec
 ├── launch.spec          # PyInstaller
 ├── build_exe.bat
 ├── requirements.txt
@@ -228,7 +396,7 @@ A00210_FileManager/
 ```
 
 - **core 는 Qt/Maya 를 import 하지 않는다** → 단위 테스트·exe 빌드 용이. 화면 캡쳐만 Qt(`QScreen.grabWindow`)에 의존.
-- Qt 바인딩은 `Framework/qt/qt.py`(PySide6→2 폴백), 테마는 `Framework/themes/theme_manager.py`(`blue_dark.qss`) 재사용.
+- Qt 바인딩은 `Framework/qt/qt.py`(PySide6→2 폴백), 테마는 `Framework/themes/theme_manager.py`(`green_dark.qss`, 파이프라인/유틸 카테고리) 재사용.
 
 ---
 
@@ -242,3 +410,17 @@ A00210_FileManager/
   대신 가상 데스크탑 geometry 로 전체 모니터를 덮는다(Windows 10/11 공통, 풀스크린+반투명의 단일모니터
   스냅/합성 깨짐 회피). (v01.05)
 - UI 텍스트·로그·git 커밋 메시지는 영어, 주석/문서는 한국어(프로젝트 관례).
+
+---
+
+## 로그창 (v01.30)
+
+로그창은 **공용 위젯 `JUN_mod_log_qt_v01`** 이다. 오른쪽 위에 작은 버튼 셋이 붙어 있다.
+
+| 버튼 | 동작 |
+|------|------|
+| `Expand` | 로그를 **별도 창으로 옮겨** 크게 본다. 확장 중에 들어온 로그도 같은 곳에 쌓이고, 창을 닫으면 제자리로 돌아온다 |
+| `Clear` | 로그를 비운다 |
+| `Copy` | 로그 **전문**을 클립보드로 |
+
+자세한 것은 [`Framework_MOD_log_qt.md`](Framework_MOD_log_qt.md).

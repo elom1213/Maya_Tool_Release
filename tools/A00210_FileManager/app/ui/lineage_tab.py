@@ -1,5 +1,5 @@
 # Python Script by Ji Hun Park
-# last Update date : 2026-06-18
+# last Update date : 2026-06-22
 # A00210_FileManager - "Lineage" tab (Qt)
 #
 # 파일들(.mb/.ma 뿐 아니라 .fbx/.obj 등 포맷 무관) 사이의 브랜치/병합 관계(DAG)를
@@ -14,10 +14,10 @@
 # project_root / store_dir / 로그는 MainWindow 에서 콜러블로 주입받는다(단일 소스 유지).
 
 import os
-import sys
 import time
-import subprocess
 
+from Framework.core.file_opener import open_path
+from Framework.qt import JUN_mod_checkList_qt
 from Framework.qt.qt import (
     QWidget,
     QVBoxLayout,
@@ -29,10 +29,12 @@ from Framework.qt.qt import (
     QPushButton,
     QCheckBox,
     QComboBox,
+    QPlainTextEdit,
     QListWidget,
     QListWidgetItem,
     QFileDialog,
     QMessageBox,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QMenu,
@@ -43,12 +45,14 @@ from Framework.qt.qt import (
     QGraphicsItem,
     QPainter,
     QPainterPath,
+    QPainterPathStroker,
     QPen,
     QBrush,
     QColor,
     QFont,
     QFontMetrics,
     QPixmap,
+    QPolygonF,
     Qt,
     QRectF,
     QPointF,
@@ -61,6 +65,9 @@ from ..core.store import OutsideProjectRootError
 
 NODE_W = 150
 NODE_H = 48
+
+# reference(참조) 점선 엣지 색 — 계보 레인 색과 겹치지 않는 중립 회색.
+REF_EDGE_COLOR = "#9AA0A6"
 
 
 # ============================================================== graphics items
@@ -83,6 +90,11 @@ class NodeItem(QGraphicsObject):
     # --- geometry
     def boundingRect(self):
         return QRectF(-3, -3, NODE_W + 6, NODE_H + 6)
+
+    def set_display_color(self, color_hex):
+        """노드 채움색을 즉시 바꾼다(재렌더 없이 선택 상태 유지). 모델 갱신은 호출자 담당."""
+        self._color = QColor(color_hex)
+        self.update()
 
     def top_center_scene(self):
         return self.scenePos() + QPointF(NODE_W / 2.0, 0.0)
@@ -145,8 +157,9 @@ class NodeItem(QGraphicsObject):
             return
         menu = QMenu()
         act_reveal = menu.addAction("Reveal in File Explorer")
-        # 실제 파일 경로를 해석할 수 있을 때만 활성(planned/루트 밖/없는 파일은 비활성).
-        act_reveal.setEnabled(bool(self.tab.node_abs_path(self.node)))
+        # key 가 있으면 경로를 팝업으로 보여줄 수 있다(파일이 로컬에 없어도 OK).
+        # planned/루트 밖(key="") 만 비활성.
+        act_reveal.setEnabled(bool(self.node.key))
         chosen = menu.exec(event.screenPos())
         if chosen is act_reveal:
             self.tab.reveal_node(self.node)
@@ -154,24 +167,29 @@ class NodeItem(QGraphicsObject):
 
 
 class EdgeItem(QGraphicsPathItem):
-    """부모 -> 자식 연결선. 색은 자식 레인 색."""
+    """노드 사이 연결선. 클릭으로 선택(삭제 대상 표시).
 
-    def __init__(self, parent_id, child_id):
+    kind="lineage": 부모 -> 자식 계보 실선(색 = 자식 레인 색, planned 면 점선).
+    kind="ref"    : 참조 대상 -> 참조하는 노드 점선(회색 + 채워진 삼각 화살촉).
+                    parent_id=참조 대상(source), child_id=참조하는 노드(owner).
+    """
+
+    def __init__(self, parent_id, child_id, kind="lineage"):
         super().__init__()
         self.parent_id = parent_id
         self.child_id = child_id
+        self.kind = kind
         self.color_hex = "#888888"
         self.dashed = False
+        self._head = []        # 화살촉 꼭짓점 3개(좌/끝/우)
         self.setZValue(-1.0)
+        # 클릭으로 선택 가능(선택 시 paint 에서 강조). 노드보다 뒤(zValue) 라 빈 곳에서 선택.
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
 
     def set_style(self, color_hex, dashed):
         self.color_hex = color_hex
         self.dashed = dashed
-        pen = QPen(QColor(color_hex), 2.0)
-        pen.setCosmetic(False)
-        if dashed:
-            pen.setStyle(Qt.DashLine)
-        self.setPen(pen)
+        self.update()
 
     def route(self, p_anchor, c_anchor):
         path = QPainterPath(p_anchor)
@@ -181,12 +199,52 @@ class EdgeItem(QGraphicsPathItem):
             QPointF(c_anchor.x(), mid_y),
             c_anchor,
         )
-        # 자식쪽 화살촉(아래로 향하는 V).
-        a = 7.0
-        path.moveTo(c_anchor.x() - a, c_anchor.y() - a)
-        path.lineTo(c_anchor.x(), c_anchor.y())
-        path.lineTo(c_anchor.x() + a, c_anchor.y() - a)
         self.setPath(path)
+        # 자식(끝)쪽 화살촉(아래로 향하는 V). lineage=빈 V, ref=채운 삼각형.
+        a = 7.0
+        self._head = [
+            QPointF(c_anchor.x() - a, c_anchor.y() - a),
+            QPointF(c_anchor.x(), c_anchor.y()),
+            QPointF(c_anchor.x() + a, c_anchor.y() - a),
+        ]
+
+    def boundingRect(self):
+        # 선택 시 두꺼운 펜(4px) + 화살촉을 고려해 여유를 둔다.
+        return self.path().boundingRect().adjusted(-8, -8, 8, 8)
+
+    def shape(self):
+        # 얇은 곡선을 클릭하기 쉽도록 hit 영역을 넓힌다.
+        stroker = QPainterPathStroker()
+        stroker.setWidth(10.0)
+        return stroker.createStroke(self.path())
+
+    def paint(self, painter, option, widget=None):
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if self.isSelected():
+            color = QColor("#FFFFFF")
+            width = 4.0
+        else:
+            color = QColor(self.color_hex)
+            width = 2.0
+        pen = QPen(color, width)
+        if self.dashed:
+            pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(self.path())
+
+        if not self._head:
+            return
+        # 화살촉은 항상 실선으로(점선 패턴이 화살촉에 끊겨 보이지 않게).
+        poly = QPolygonF(self._head)
+        painter.setPen(QPen(color, width))
+        if self.kind == "ref":
+            # reference 는 채운 삼각형으로 계보(빈 V)와 확실히 구분.
+            painter.setBrush(QBrush(color))
+            painter.drawPolygon(poly)
+        else:
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPolyline(poly)
 
 
 class LineageScene(QGraphicsScene):
@@ -196,12 +254,16 @@ class LineageScene(QGraphicsScene):
         super().__init__()
         self.tab = tab
         self._connect_mode = False
-        self._pending = None        # 시작(부모) NodeItem
+        self._connect_kind = "lineage"   # "lineage"(계보 실선) | "ref"(참조 점선)
+        self._pending = None        # 시작 NodeItem (계보=부모 / ref=참조 대상)
         self._temp = None           # 임시 rubber-band path
 
     def set_connect_mode(self, on):
         self._connect_mode = bool(on)
         self._clear_temp()
+
+    def set_connect_kind(self, kind):
+        self._connect_kind = "ref" if kind == "ref" else "lineage"
 
     def _clear_temp(self):
         if self._temp is not None:
@@ -244,13 +306,26 @@ class LineageScene(QGraphicsScene):
     def mouseReleaseEvent(self, event):
         if self._connect_mode and self._pending is not None:
             target = self._node_at(event.scenePos())
-            parent = self._pending
+            start = self._pending
             self._clear_temp()
-            if target is not None and target is not parent:
-                self.tab.try_add_edge(parent.node.id, target.node.id)
+            if target is not None and target is not start:
+                if self._connect_kind == "ref":
+                    # 드래그 방향 = 화살표 방향: start(참조 대상) -> target(참조하는 노드).
+                    self.tab.try_add_reference(start.node.id, target.node.id)
+                else:
+                    self.tab.try_add_edge(start.node.id, target.node.id)
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        # Delete/Backspace: 선택된 노드/연결(엣지)을 삭제.
+        if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            if self.tab is not None:
+                self.tab.delete_selection()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 # ==================================================================== view
@@ -303,13 +378,38 @@ class LineageView(QGraphicsView):
             pos = self._evt_pos(event)
             delta = pos - self._pan_last
             self._pan_last = pos
-            hbar = self.horizontalScrollBar()
-            vbar = self.verticalScrollBar()
-            hbar.setValue(hbar.value() - delta.x())
-            vbar.setValue(vbar.value() - delta.y())
+            self._pan_by(delta.x(), delta.y())
             event.accept()
             return
         super().mouseMoveEvent(event)
+
+    # 중간버튼 팬은 스크롤바를 움직이는 방식이라 이동 범위가 sceneRect 안에 갇힌다.
+    # 팬이 sceneRect 경계에 가까워지면 그 방향으로 sceneRect 를 넉넉히 키워, 콘텐츠
+    # 바깥으로도 계속 끌 수 있게 한다(사실상 무한 팬). _update_scene_rect 가 다음
+    # 렌더에서 콘텐츠 기준으로 다시 줄이므로 영구적으로 부풀지 않는다.
+    _PAN_MARGIN = 600     # 경계로부터 이만큼(px) 안에 들면 그 방향으로 키운다
+
+    def _pan_by(self, dx, dy):
+        hbar = self.horizontalScrollBar()
+        vbar = self.verticalScrollBar()
+        m = self._PAN_MARGIN
+
+        grow_l = m if hbar.value() - dx <= hbar.minimum() + m else 0.0
+        grow_r = m if hbar.value() - dx >= hbar.maximum() - m else 0.0
+        grow_t = m if vbar.value() - dy <= vbar.minimum() + m else 0.0
+        grow_b = m if vbar.value() - dy >= vbar.maximum() - m else 0.0
+
+        if grow_l or grow_r or grow_t or grow_b:
+            scale = self.transform().m11() or 1.0   # px(뷰) → scene 단위 변환
+            rect = self.sceneRect().adjusted(
+                -grow_l / scale, -grow_t / scale, grow_r / scale, grow_b / scale
+            )
+            self.setSceneRect(rect)
+            # sceneRect 를 키우면 Qt 가 화면을 유지하려고 스크롤바 값/범위를 옮기므로,
+            # 새 값 기준으로 다시 읽어 델타를 적용한다.
+
+        hbar.setValue(hbar.value() - dx)
+        vbar.setValue(vbar.value() - dy)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MiddleButton and self._panning:
@@ -353,6 +453,12 @@ class AddFromScanDialog(QDialog):
             item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, entry)
             self.list.addItem(item)
+        self.list.setToolTip(
+            "Check the files to add.\n"
+            "Shift / Ctrl click to select several rows - clicking the check box of a\n"
+            "selected row (or Space) checks or unchecks every selected row.")
+        # v01.31 : 고른 행 한꺼번에 체크 (Framework 공용 동작).
+        self._check_list = JUN_mod_checkList_qt.JUN_mod_checkList_qt_v01(self.list)
         layout.addWidget(self.list, stretch=1)
 
         sel_row = QHBoxLayout()
@@ -478,6 +584,28 @@ class LineageTab(QWidget):
         self.btn_connect.setCheckable(True)
         self.btn_connect.toggled.connect(self.on_toggle_connect)
 
+        # Connect Mode 에서 그을 엣지 종류: 계보(실선) vs reference(점선).
+        self.cmb_connect_kind = QComboBox()
+        self.cmb_connect_kind.addItem("Lineage (parent)", "lineage")
+        self.cmb_connect_kind.addItem("Reference (dashed)", "ref")
+        self.cmb_connect_kind.setToolTip(
+            "What a node->node drag creates while Connect Mode is ON:\n"
+            "  Lineage = solid version/branch edge (drag parent -> child)\n"
+            "  Reference = dashed edge (drag referenced file -> referencing file)\n"
+            "\n"
+            "If one or more edges are selected, changing this converts those\n"
+            "edges to the chosen type (direction is kept; shape updates live)."
+        )
+        self.cmb_connect_kind.currentIndexChanged.connect(self.on_connect_kind_changed)
+
+        # 다중 선택(러버밴드) 후 노드/엣지 색을 한 번에 지정/되돌림.
+        btn_color = QPushButton("Set Color...")
+        btn_color.setToolTip("Set a custom color on the selected node(s) and/or edge(s).")
+        btn_color.clicked.connect(self.on_set_color)
+        btn_color_reset = QPushButton("Reset Color")
+        btn_color_reset.setToolTip("Revert the selected node(s)/edge(s) to their default color.")
+        btn_color_reset.clicked.connect(self.on_reset_color)
+
         btn_scan = QPushButton("Add Node from Scan...")
         btn_scan.clicked.connect(self.on_add_from_scan)
         btn_file = QPushButton("Add File...")
@@ -489,6 +617,10 @@ class LineageTab(QWidget):
 
         row.addWidget(btn_layout)
         row.addWidget(self.btn_connect)
+        row.addWidget(self.cmb_connect_kind)
+        row.addSpacing(12)
+        row.addWidget(btn_color)
+        row.addWidget(btn_color_reset)
         row.addStretch(1)
         row.addWidget(btn_scan)
         row.addWidget(btn_file)
@@ -503,7 +635,9 @@ class LineageTab(QWidget):
 
         self.view = LineageView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing, True)
-        self.view.setDragMode(QGraphicsView.NoDrag)
+        # 빈 곳 드래그 = 러버밴드 다중선택(범위에 일부라도 걸친 노드/엣지 선택). 중간버튼 팬·휠 줌은 view 가 처리.
+        self.view.setDragMode(QGraphicsView.RubberBandDrag)
+        self.view.setRubberBandSelectionMode(Qt.IntersectsItemShape)
         return self.view
 
     def _build_inspector(self):
@@ -550,7 +684,13 @@ class LineageTab(QWidget):
         self.lbl_node_thumb.setText("No thumbnail")
         layout.addWidget(self.lbl_node_thumb, alignment=Qt.AlignHCenter)
 
-        layout.addStretch(1)
+        # 이 노드 파일의 record 로그 기록(File Manager 탭의 Log history 와 동일 내용).
+        # 노드 선택 시 store 의 record JSON 에서 다시 읽어 항상 최신 기록을 보여준다.
+        layout.addWidget(QLabel("Log history (from record)"))
+        self.txt_node_logs = QPlainTextEdit()
+        self.txt_node_logs.setReadOnly(True)
+        layout.addWidget(self.txt_node_logs, stretch=1)
+
         self._set_inspector_enabled(False)
         return group
 
@@ -728,18 +868,114 @@ class LineageTab(QWidget):
         self._log("Added planned node. Rename it in the Node panel.")
 
     def on_delete_node(self):
-        node = self._selected_node()
-        if node is None:
-            QMessageBox.warning(self, "Lineage", "Select a node first.")
+        # 팝업 없이 선택된 노드를 바로 삭제(다중 선택 지원).
+        node_items = [it for it in self.scene.selectedItems()
+                      if isinstance(it, NodeItem)]
+        if not node_items:
+            self._log("No node selected to delete.")
             return
-        ok = QMessageBox.question(self, "Lineage", f"Delete node '{node.file_name}'?")
-        if ok != QMessageBox.Yes:
-            return
-        lin.remove_node(self._graph, node.id)
+        for it in node_items:
+            lin.remove_node(self._graph, it.node.id)
         self._selected_id = None
         self._render_graph()
         self._populate_inspector(None)
-        self._log(f"Deleted node: {node.file_name}")
+        self._log(f"Deleted {len(node_items)} node(s).")
+
+    def _selected_node_items(self):
+        return [it for it in self.scene.selectedItems() if isinstance(it, NodeItem)]
+
+    def _selected_edge_items(self):
+        return [it for it in self.scene.selectedItems() if isinstance(it, EdgeItem)]
+
+    @staticmethod
+    def _log_color_targets(verb, hex_str, node_items, edge_items):
+        parts = []
+        if node_items:
+            parts.append(f"{len(node_items)} node(s)")
+        if edge_items:
+            parts.append(f"{len(edge_items)} edge(s)")
+        return f"{verb} {hex_str} on " + " and ".join(parts) + "."
+
+    def on_set_color(self):
+        """선택된 노드/엣지(다중 가능)에 색을 한 번에 지정. 선택 상태는 유지."""
+        node_items = self._selected_node_items()
+        edge_items = self._selected_edge_items()
+        if not node_items and not edge_items:
+            self._log("No node or edge selected to color.")
+            return
+
+        if node_items:
+            n0 = node_items[0].node
+            initial = QColor(n0.color) if n0.color else node_items[0]._color
+        else:
+            initial = QColor(edge_items[0].color_hex)
+        chosen = QColorDialog.getColor(initial, self, "Pick Color")
+        if not chosen.isValid():
+            return
+        hex_str = chosen.name()
+
+        for it in node_items:
+            it.node.color = hex_str
+            it.set_display_color(hex_str)
+        for e in edge_items:
+            key = lin.edge_color_key(e.kind, e.parent_id, e.child_id)
+            self._graph.edge_colors[key] = hex_str
+            e.set_style(hex_str, e.dashed)
+        self._log(self._log_color_targets("Set color", hex_str, node_items, edge_items))
+
+    def on_reset_color(self):
+        """선택된 노드/엣지의 수동색을 지워 기본색(노드=레인색, 엣지=레인색/회색)으로 되돌린다."""
+        node_items = self._selected_node_items()
+        edge_items = self._selected_edge_items()
+        if not node_items and not edge_items:
+            self._log("No node or edge selected to reset.")
+            return
+
+        lane_of, _ = lin.compute_lanes(self._graph)
+        for it in node_items:
+            it.node.color = ""
+            it.set_display_color(lin.lane_color(lane_of.get(it.node.id, 0)))
+        for e in edge_items:
+            key = lin.edge_color_key(e.kind, e.parent_id, e.child_id)
+            self._graph.edge_colors.pop(key, None)
+            default = (REF_EDGE_COLOR if e.kind == "ref"
+                       else lin.lane_color(lane_of.get(e.child_id, 0)))
+            e.set_style(default, e.dashed)
+        self._log(self._log_color_targets("Reset color", "to default", node_items, edge_items))
+
+    def delete_selection(self):
+        """선택된 노드/연결(엣지)을 팝업 없이 삭제. Delete 키 공용."""
+        sel = self.scene.selectedItems()
+        node_items = [it for it in sel if isinstance(it, NodeItem)]
+        edge_items = [it for it in sel if isinstance(it, EdgeItem)]
+        if not node_items and not edge_items:
+            return
+
+        # 1) 선택된 연결(엣지) 제거 — 계보는 자식 parents, reference 는 owner references 에서 제거.
+        for e in edge_items:
+            if getattr(e, "kind", "lineage") == "ref":
+                owner = self._graph.node_by_id(e.child_id)
+                if owner is not None and e.parent_id in owner.references:
+                    owner.references = [r for r in owner.references if r != e.parent_id]
+            else:
+                child = self._graph.node_by_id(e.child_id)
+                if child is not None and e.parent_id in child.parents:
+                    child.parents = [p for p in child.parents if p != e.parent_id]
+
+        # 2) 선택된 노드 제거(다른 노드 parents 의 고아 참조도 정리).
+        for it in node_items:
+            lin.remove_node(self._graph, it.node.id)
+
+        self._selected_id = None
+        self._render_graph()
+        self._populate_inspector(None)
+
+        parts = []
+        if edge_items:
+            parts.append(f"{len(edge_items)} connection(s)")
+        if node_items:
+            parts.append(f"{len(node_items)} node(s)")
+        self._log("Deleted " + " and ".join(parts) + ".")
 
     def try_add_edge(self, parent_id, child_id):
         child = self._graph.node_by_id(child_id)
@@ -756,53 +992,76 @@ class LineageTab(QWidget):
         parent = self._graph.node_by_id(parent_id)
         self._log(f"Linked: {parent.file_name if parent else '?'} -> {child.file_name}")
 
+    def try_add_reference(self, source_id, owner_id):
+        """reference 점선 엣지 추가. source(참조 대상) -> owner(참조하는 노드)."""
+        owner = self._graph.node_by_id(owner_id)
+        if owner is None:
+            return
+        if source_id in owner.references:
+            self._log("Reference already exists.")
+            return
+        if lin.would_create_ref_cycle(self._graph, source_id, owner_id):
+            QMessageBox.warning(self, "Lineage", "That reference would create a cycle.")
+            return
+        owner.references.append(source_id)
+        self._render_graph()
+        source = self._graph.node_by_id(source_id)
+        self._log(f"Reference: {source.file_name if source else '?'} -> {owner.file_name}")
+
     # ============================================================ reveal in explorer
 
-    def node_abs_path(self, node):
-        """노드가 가리키는 실제 파일의 절대경로(존재할 때만). 없으면 "".
+    def node_path_info(self, node):
+        """(보여줄 경로, 로컬 존재여부). key 가 없으면 ("", False).
 
-        key 는 project_root 기준 상대경로이므로 root + key 로 복원한다. planned/루트 밖
-        (key="")/파일 없음/루트 미설정이면 경로가 없다.
+        key 는 project_root 기준 상대경로. root 가 설정돼 있으면 root+key 절대경로와
+        실제 존재여부를 반환하고, root 미설정이면 상대 key 만이라도 반환한다(다른 PC 에서
+        만든 그래프 — 예: A00211_RefLineage 결과 — 도 경로를 볼 수 있게).
         """
         if node is None or not node.key:
-            return ""
+            return "", False
         store = self._get_store()
         root = getattr(store, "project_root", "") if store is not None else ""
         if not root:
-            return ""
-        path = os.path.join(root, *node.key.split("/"))
-        return path if os.path.exists(path) else ""
+            return node.key, False
+        path = os.path.normpath(os.path.join(root, *node.key.split("/")))
+        return path, os.path.exists(path)
 
     def reveal_node(self, node):
-        """노드 파일을 탐색기에서 (폴더를 열고 파일을 선택해) 보여준다."""
-        path = self.node_abs_path(node)
+        """파일이 로컬에 있으면 탐색기에서 조용히 연다(팝업 없음). 없으면 경로만 팝업으로 보여준다."""
+        path, exists = self.node_path_info(node)
         if not path:
             QMessageBox.information(
                 self, "Lineage",
-                "No file to reveal — this node is planned, out of the project root, "
-                "or the file no longer exists at its recorded path.",
+                "No path for this node — it is planned or out of the project root.",
             )
             self._log(f"Reveal skipped (no path): {node.file_name if node else '?'}")
             return
-        if self._reveal_in_explorer(path):
-            self._log(f"Revealed in File Explorer: {path}")
-        else:
-            self._log(f"Failed to open File Explorer for: {path}")
+
+        if exists:
+            # 파일이 실제로 있으면 탐색기로 열기만 하고 팝업은 띄우지 않는다.
+            if self._reveal_in_explorer(path):
+                self._log(f"Revealed in File Explorer: {path}")
+            else:
+                self._log(f"Failed to open File Explorer for: {path}")
+            return
+
+        # 파일이 로컬에 없을 때만 경로를 팝업으로(선택/복사 가능) 보여준다.
+        self._log(f"Path (file not present locally): {path}")
+        box = QMessageBox(self)
+        box.setWindowTitle("File Path")
+        box.setIcon(QMessageBox.Information)
+        box.setText(path)            # 경로를 본문으로(마우스로 선택/복사 가능)
+        box.setInformativeText("File not found on this machine — path shown only.")
+        box.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        box.exec()
 
     @staticmethod
     def _reveal_in_explorer(path):
-        """OS 파일 탐색기에서 파일을 선택 상태로 연다(Windows 우선)."""
-        path = os.path.normpath(path)
+        """OS 파일 탐색기에서 파일을 선택 상태로 연다(Framework.file_opener 위임)."""
         try:
-            if sys.platform.startswith("win"):
-                # explorer /select, 는 성공해도 비0 종료코드를 내므로 반환값을 보지 않는다.
-                subprocess.Popen(["explorer", "/select,", path])
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", "-R", path])
-            else:
-                subprocess.Popen(["xdg-open", os.path.dirname(path)])
+            open_path(path)
             return True
-        except OSError:
+        except (OSError, ValueError):
             return False
 
     # ============================================================ layout / connect
@@ -815,10 +1074,77 @@ class LineageTab(QWidget):
         self._fit_view()
         self._log("Auto layout applied.")
 
+    def on_connect_kind_changed(self, *_):
+        kind = self.cmb_connect_kind.currentData()
+        self.scene.set_connect_kind(kind)
+        # 엣지가 선택돼 있으면 그 엣지(들)의 종류를 선택한 종류로 즉시 변환(모양도 바뀜).
+        self._convert_selected_edges(kind)
+
+    def _convert_selected_edges(self, kind):
+        """선택된 엣지(들)를 계보<->reference 로 변환. 방향(P->C)은 유지, 모양은 즉시 갱신.
+
+        계보 엣지는 child.parents, reference 엣지는 owner.references 로 저장되므로
+        모델을 옮기고(순환이면 건너뜀), 색 오버라이드 키(kind 포함)도 이관한다.
+        """
+        targets = [e for e in self._selected_edge_items() if e.kind != kind]
+        if not targets:
+            return
+
+        converted = []     # (kind, pid, cid) — 렌더 후 다시 선택할 대상
+        blocked = 0
+        for e in targets:
+            pid, cid = e.parent_id, e.child_id
+            child = self._graph.node_by_id(cid)
+            if child is None:
+                continue
+
+            if kind == "ref":
+                # lineage(P=부모, C=자식) -> reference(C 가 P 를 참조), 화살표 P->C 유지.
+                if lin.would_create_ref_cycle(self._graph, pid, cid):
+                    blocked += 1
+                    continue
+                child.parents = [p for p in child.parents if p != pid]
+                if pid not in child.references:
+                    child.references.append(pid)
+            else:
+                # reference(C 가 P 를 참조) -> lineage(P=부모, C=자식).
+                if lin.would_create_cycle(self._graph, pid, cid):
+                    blocked += 1
+                    continue
+                child.references = [r for r in child.references if r != pid]
+                if pid not in child.parents:
+                    child.parents.append(pid)
+
+            # 색 오버라이드 키 이관(키에 kind 가 들어있어 변환 시 옮겨야 색이 유지됨).
+            old_key = lin.edge_color_key(e.kind, pid, cid)
+            new_key = lin.edge_color_key(kind, pid, cid)
+            if old_key in self._graph.edge_colors:
+                self._graph.edge_colors[new_key] = self._graph.edge_colors.pop(old_key)
+
+            converted.append((kind, pid, cid))
+
+        if converted:
+            # 계보 변경은 레인/색 계산에 영향 → 재렌더. 변환 엣지는 다시 선택해 연속 변환 가능.
+            self._render_graph()
+            want = set(converted)
+            for e in self._edge_items:
+                if (e.kind, e.parent_id, e.child_id) in want:
+                    e.setSelected(True)
+            self._log(f"Converted {len(converted)} edge(s) to {kind}.")
+        if blocked:
+            QMessageBox.warning(
+                self, "Lineage",
+                f"{blocked} edge(s) not converted (would create a cycle).",
+            )
+
     def on_toggle_connect(self, checked):
         self.scene.set_connect_mode(checked)
+        self.scene.set_connect_kind(self.cmb_connect_kind.currentData())
         self.btn_connect.setText("Connect Mode (ON)" if checked else "Connect Mode")
-        # connect 중에는 노드 드래그/선택을 막아 선 긋기에 집중.
+        # connect 중엔 러버밴드/노드 드래그를 끄고 선 긋기에 집중. 평소엔 러버밴드 다중선택.
+        self.view.setDragMode(
+            QGraphicsView.NoDrag if checked else QGraphicsView.RubberBandDrag
+        )
         for item in self._node_items.values():
             item.setFlag(QGraphicsItem.ItemIsMovable, not checked)
 
@@ -832,14 +1158,17 @@ class LineageTab(QWidget):
         lane_of, _order = lin.compute_lanes(self._graph)
 
         for node in self._graph.nodes:
-            color = lin.lane_color(lane_of.get(node.id, 0))
-            item = NodeItem(node, color, self)
+            lane_col = lin.lane_color(lane_of.get(node.id, 0))
+            # 수동 색이 있으면 노드 채움은 그 색, 없으면 레인 자동색.
+            item = NodeItem(node, node.color or lane_col, self)
             if self.btn_connect.isChecked():
                 item.setFlag(QGraphicsItem.ItemIsMovable, False)
             self.scene.addItem(item)
             self._node_items[node.id] = item
 
         ids = {n.id for n in self._graph.nodes}
+        overrides = self._graph.edge_colors
+        # 계보(parents) 실선 엣지 — 기본색은 자식 레인 색, 오버라이드 있으면 그 색.
         for node in self._graph.nodes:
             child_color = lin.lane_color(lane_of.get(node.id, 0))
             for pid in node.parents:
@@ -847,7 +1176,19 @@ class LineageTab(QWidget):
                     continue            # 고아 참조는 무시
                 edge = EdgeItem(pid, node.id)
                 dashed = node.planned or self._graph.node_by_id(pid).planned
-                edge.set_style(child_color, dashed)
+                key = lin.edge_color_key("lineage", pid, node.id)
+                edge.set_style(overrides.get(key) or child_color, dashed)
+                self.scene.addItem(edge)
+                self._edge_items.append(edge)
+
+        # reference(참조) 점선 엣지 — 참조 대상 -> 참조하는 노드, 기본 회색(오버라이드 가능).
+        for node in self._graph.nodes:
+            for tid in node.references:
+                if tid not in ids:
+                    continue            # 고아 참조는 무시
+                edge = EdgeItem(tid, node.id, kind="ref")
+                key = lin.edge_color_key("ref", tid, node.id)
+                edge.set_style(overrides.get(key) or REF_EDGE_COLOR, True)
                 self.scene.addItem(edge)
                 self._edge_items.append(edge)
 
@@ -858,25 +1199,55 @@ class LineageTab(QWidget):
         if self._selected_id and self._selected_id in self._node_items:
             self._node_items[self._selected_id].setSelected(True)
 
+    # 같은 두 노드 사이에 여러 엣지(예: 계보 + reference)가 있으면 같은 앵커로 겹친다.
+    # 노드쌍별로 묶어 가로로 균등하게 벌려, 화살표가 포개지지 않게 한다.
+    _EDGE_FAN_SPACING = 18.0
+
     def _reroute_edges(self):
+        groups = {}
         for edge in self._edge_items:
-            p = self._node_items.get(edge.parent_id)
-            c = self._node_items.get(edge.child_id)
+            groups.setdefault((edge.parent_id, edge.child_id), []).append(edge)
+
+        for (pid, cid), edges in groups.items():
+            p = self._node_items.get(pid)
+            c = self._node_items.get(cid)
             if p is None or c is None:
                 continue
-            edge.route(p.bottom_center_scene(), c.top_center_scene())
+            n = len(edges)
+            for i, edge in enumerate(edges):
+                # 중심 기준 대칭 오프셋: 1개면 0, 2개면 ±half, ...
+                off = (i - (n - 1) / 2.0) * self._EDGE_FAN_SPACING
+                shift = QPointF(off, 0.0)
+                edge.route(p.bottom_center_scene() + shift,
+                           c.top_center_scene() + shift)
 
     def _update_scene_rect(self):
         rect = self.scene.itemsBoundingRect()
         if rect.isNull():
             self.scene.setSceneRect(QRectF(0, 0, 400, 300))
-        else:
-            self.scene.setSceneRect(rect.adjusted(-200, -200, 200, 200))
+            return
+        # 중간버튼 팬 가능 범위 = sceneRect. 콘텐츠 둘레에 한 뷰포트 크기 이상의
+        # 여백을 둬서, 어느 노드든 화면 중앙까지 끌어올 수 있게 한다(줌 아웃 상태도
+        # 고려해 현재 배율로 환산). 경계에 더 닿으면 LineageView._pan_by 가 추가로 넓힌다.
+        scale = self.view.transform().m11() or 1.0
+        vp = self.view.viewport().rect()
+        mx = max(800.0, vp.width() / scale)
+        my = max(800.0, vp.height() / scale)
+        self.scene.setSceneRect(rect.adjusted(-mx, -my, mx, my))
 
     def _fit_view(self):
         rect = self.scene.itemsBoundingRect()
         if not rect.isNull():
             self.view.fitInView(rect.adjusted(-40, -40, 40, 40), Qt.KeepAspectRatio)
+
+    def showEvent(self, event):
+        # 다른 탭(File Manager)에서 Save Record 후 돌아왔을 때, 선택된 노드의 로그/썸네일을
+        # 다시 읽어 최신 기록과 동기화한다(노드를 다시 클릭하지 않아도 갱신).
+        super().showEvent(event)
+        node = self._selected_node()
+        if node is not None:
+            self._refresh_node_logs(node)
+            self._refresh_node_thumb(node)
 
     # ============================================================ inspector
 
@@ -903,6 +1274,7 @@ class LineageTab(QWidget):
             self.lbl_node_key.setText("-")
             self.lbl_node_thumb.clear()
             self.lbl_node_thumb.setText("No thumbnail")
+            self.txt_node_logs.clear()
             self._set_inspector_enabled(False)
         else:
             self.ipf_node_name.setText(node.file_name)
@@ -912,6 +1284,7 @@ class LineageTab(QWidget):
             self.cmb_relation.setCurrentIndex(idx if idx >= 0 else 0)
             self.lbl_node_key.setText(node.key or "(planned / out of root)")
             self._refresh_node_thumb(node)
+            self._refresh_node_logs(node)
             self._set_inspector_enabled(True)
 
         for w in block:
@@ -929,6 +1302,30 @@ class LineageTab(QWidget):
                 self.lbl_node_thumb.setPixmap(pix)
                 return
         self.lbl_node_thumb.setText("No thumbnail")
+
+    def _refresh_node_logs(self, node):
+        """노드 파일의 record 로그 기록 표시 — File Manager 탭 Log history 와 동일 포맷.
+
+        store 의 records/<key>.json 에서 매번 다시 읽으므로(Save Record 가 쓰는 곳),
+        File Manager 탭에서 기록한 내용이 그대로 동기화되어 보인다.
+        """
+        self.txt_node_logs.clear()
+        if not node or not node.key:
+            self.txt_node_logs.setPlaceholderText("No record (planned / out of project root).")
+            return
+
+        store = self._get_store()
+        record = store.load(node.key) if store is not None else None
+        if record is None or not record.logs:
+            self.txt_node_logs.setPlaceholderText("No log history recorded for this file.")
+            return
+
+        lines = []
+        for entry in record.logs:
+            lines.append(f"[{entry.timestamp}] {entry.author}")
+            lines.append(entry.note)
+            lines.append("")
+        self.txt_node_logs.setPlainText("\n".join(lines).strip())
 
     def _apply_node_name(self):
         node = self._selected_node()

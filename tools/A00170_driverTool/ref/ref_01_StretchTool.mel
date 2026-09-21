@@ -1,0 +1,656 @@
+// 22 02 28
+// MEL Script by Ji Hun Park
+
+// Stretch Tool V01
+
+//===================================================================================
+// UI Commands : Text Scroll List Button
+// Up, Down Selections
+//===================================================================================
+
+global proc string[] JUN_appendString(string $array[], string $item)
+{
+    int $position_insert = size($array);
+    stringArrayInsertAtIndex($position_insert, $array, $item);
+    return $array;
+}
+
+global proc int[] JUN_get_reversedArray_int(int $input_array[])
+{
+    int $result_array[];
+    for($i = 0; $i < size($input_array); $i++)
+        $result_array[size($input_array) - $i - 1] = $input_array[$i];
+    return $result_array;
+}
+
+global proc string[] JUN_get_reversedArray_str(string $input_array[])
+{
+    string $result_array[];
+    for($i = 0; $i < size($input_array); $i++)
+        $result_array[size($input_array) - $i - 1] = $input_array[$i];
+    return $result_array;
+}
+
+global proc int JUN_get_index_insert(int $JUN_flag_isUp,
+                                       int $JUN_index_selected,
+                                       int $JUN_size_allItems) 
+{
+    int $JUN_index_insert;
+    // {"a", "b" , "c" } "a"'s JUN_index_selected = 1
+    if($JUN_flag_isUp)
+    {
+        if($JUN_index_selected == 1)
+            $JUN_index_insert = $JUN_size_allItems;
+        else
+            $JUN_index_insert = $JUN_index_selected - 2;
+    }
+    else
+    {
+        if($JUN_index_selected == $JUN_size_allItems)
+            $JUN_index_insert = 0;
+        else
+            $JUN_index_insert = $JUN_index_selected;
+    }
+    return $JUN_index_insert;
+}
+
+global proc JUN_cmd_selMov(string $JUN_name_tsl, int $JUN_flag_isUp)
+{
+    string $JUN_objs_allItems[] = `textScrollList -q -allItems $JUN_name_tsl`;
+    string $JUN_objs_selected[] = `textScrollList -q -selectItem  $JUN_name_tsl`;
+    int $JUN_indexs_selected[] = `textScrollList -q -selectIndexedItem $JUN_name_tsl`;
+    int $JUN_count = 0;
+    int $JUN_flag_isCrossed = 0;
+
+    if(!$JUN_flag_isUp)
+    {
+         $JUN_indexs_selected = JUN_get_reversedArray_int($JUN_indexs_selected);
+         $JUN_objs_selected = JUN_get_reversedArray_str($JUN_objs_selected);
+    }
+
+    for($JUN_index_selected in $JUN_indexs_selected)
+    {
+        int $JUN_index_insert =  JUN_get_index_insert($JUN_flag_isUp,
+                                                  $JUN_index_selected,
+                                                  size($JUN_objs_allItems));
+
+        // remove i's item from JUN_objs_allItems
+
+        string $JUN_obj_delete[];
+        JUN_appendString($JUN_obj_delete, $JUN_objs_selected[$JUN_count]);
+        $JUN_objs_allItems = stringArrayRemove($JUN_obj_delete, $JUN_objs_allItems);
+
+        // insert at JUN_index_insert's position
+        // if JUN_index_insert = 1 -> isert between a, b in {"a", "b", "c"}
+
+        stringArrayInsertAtIndex($JUN_index_insert, $JUN_objs_allItems, $JUN_objs_selected[$JUN_count++]);
+    }
+
+    textScrollList -e -removeAll $JUN_name_tsl;
+    for($JUN_obj_allItem in $JUN_objs_allItems)
+        textScrollList -e -append $JUN_obj_allItem $JUN_name_tsl;
+    
+    for($JUN_obj_selected in $JUN_objs_selected)
+        textScrollList -e -selectItem $JUN_obj_selected $JUN_name_tsl;
+
+}
+
+//===================================================================================
+// UI Commands : Text Scroll List Button
+// Add, Delete Selections
+//===================================================================================
+
+global proc JUN_cmd_tsl_select(string $name_tsl_selected)
+{
+    string $JUN_objs_selected[] = `textScrollList -q -selectItem $name_tsl_selected`;
+    select $JUN_objs_selected;
+}
+
+global proc JUN_cmd_upd_tsl_append_list(string $name_tsl, string $list_append[])
+{
+    string $i;
+    for($i in $list_append)
+      textScrollList -e -append $i $name_tsl;
+}
+
+global proc JUN_cmd_append_list(string $name_tsl, string $list_append[])
+{
+    string $i;
+    for($i in $list_append)
+      textScrollList -e -append $i $name_tsl;
+}
+
+global proc JUN_cmd_append_selected(string $name_tsl_objs)
+{
+    string $sl[] = `ls -sl`;
+    JUN_cmd_append_list($name_tsl_objs, $sl);
+    select -clear;
+}
+
+global proc JUN_cmd_delete_selected(string $name_tsl_objs)
+{
+    string $items[] = `textScrollList -q -selectItem $name_tsl_objs`;
+    string $i;
+    for($i in $items)
+        textScrollList -e -removeItem $i $name_tsl_objs;
+}
+
+global proc JUN_cmd_Clear_And_Select(string $name_tsl_objs)
+{
+    textScrollList -e -removeAll $name_tsl_objs;
+    JUN_cmd_append_selected($name_tsl_objs);
+}
+
+
+global proc JUN_cmd_upd_tex_numTsl(string $name_tsl_objs, string $name_tex_numSelect)
+{
+    textScrollList -e -removeAll $name_tsl_objs;
+    JUN_cmd_append_selected($name_tsl_objs);
+    int $JUN_num_selected = `textScrollList -q -numberOfItems $name_tsl_objs`;
+    text -e -label ("Number : " + $JUN_num_selected) $name_tex_numSelect;
+}
+
+
+
+
+//===================================================================================
+// lower
+//===================================================================================
+
+
+global proc JUN_stretch_aimCrv(string $strcObj, 
+                               string $strcAttr, 
+                               float $defaultDist)
+{
+     string $nod_animCrv = `connectionInfo -sourceFromDestination ($strcObj+"."+$strcAttr)`;
+    string $buffer[];
+    tokenize $nod_animCrv "." $buffer;
+    $nod_animCrv = $buffer[0];
+    setKeyframe -f (2*$defaultDist) -v 2 $nod_animCrv;
+    setAttr ($nod_animCrv + ".postInfinity") 4; // Cycle with offset
+}
+
+
+//===================================================================================
+// is
+//===================================================================================
+
+global proc int JUN_is_exist(string $base_str, string $input_token)
+{
+    string $result = `match $input_token $base_str`;
+    if($result == $input_token)
+        return 1;
+    return 0;
+}
+
+
+//===================================================================================
+// UI Commands : Main
+//===================================================================================
+
+//-------------------------------------------------
+// Tab 1
+// Commands : Distance
+//-------------------------------------------------
+
+global proc JUN_cmd_selStrEnd(string $name_tsl_start, string $name_tsl_end)
+{
+    string $objs_selected[] = `ls -sl`;
+    string $list_start[];
+    string $list_end[];
+
+    for($i=0; $i<size($objs_selected)-1;$i++)
+    {
+        JUN_appendString($list_start, $objs_selected[$i]);
+        JUN_appendString($list_end, $objs_selected[$i+1]);
+    }
+
+    textScrollList -e -removeAll $name_tsl_start;
+    textScrollList -e -removeAll $name_tsl_end;
+
+    JUN_cmd_append_list($name_tsl_start, $list_start);
+    JUN_cmd_append_list($name_tsl_end, $list_end);
+}
+
+global proc JUN_cmd_addStrEnd(string $name_tsl_start, string $name_tsl_end)
+{
+    string $objs_selected[] = `ls -sl`;
+    if(size($objs_selected) != 2)
+        error("Must select 2 objects to Add\n");
+    
+    JUN_cmd_append_list($name_tsl_start, {$objs_selected[0]});
+    JUN_cmd_append_list($name_tsl_end, {$objs_selected[1]});
+}
+
+global proc JUN_cmd_makeDist(string $name_tsl_start, string $name_tsl_end)
+{
+    string $objs_str[] = `textScrollList -q -allItems $name_tsl_start`;
+    string $objs_end[] = `textScrollList -q -allItems $name_tsl_end`;
+    int $objs_siz = size($objs_str) > size($objs_end) ? size($objs_end) : size($objs_str);
+
+    if(size($objs_str) == 1)
+        for($i=0;$i<size($objs_end);$i++)
+        {
+            float $vct_sp[] = `xform -q -worldSpace -translation $objs_str[0]`;
+            float $vct_ep[] = `xform -q -worldSpace -translation $objs_end[$i]`;
+            string $dist = `distanceDimension -sp $vct_sp[0] $vct_sp[1] $vct_sp[2] -ep $vct_ep[0] $vct_ep[1] $vct_ep[2]`;
+        }
+    else
+        for($i=0;$i<$objs_siz;$i++)
+        {
+            float $vct_sp[] = `xform -q -worldSpace -translation $objs_str[$i]`;
+            float $vct_ep[] = `xform -q -worldSpace -translation $objs_end[$i]`;
+            string $dist = `distanceDimension -sp $vct_sp[0] $vct_sp[1] $vct_sp[2] -ep $vct_ep[0] $vct_ep[1] $vct_ep[2]`;
+        }
+}
+
+
+//-------------------------------------------------
+// Tab 2
+// Commands : Stretch
+//-------------------------------------------------
+
+global proc JUN_cmd_upd_tsl_attr(string $JUN_name_tsl_objSrc, 
+                                 string $JUN_name_tsl_attr,
+                                 string $JUN_attr_searchInput)
+{
+    string $JUN_objs_src[] = `textScrollList -q -allItems $JUN_name_tsl_objSrc`;
+    string $JUN_list_attr_old[] = `listAttr $JUN_objs_src[0]`;
+    string $JUN_list_attr_new[];
+
+    if($JUN_attr_searchInput != "")
+        $JUN_list_attr_old = `listAttr ($JUN_objs_src[0]+"."+$JUN_attr_searchInput)`;
+    
+    for($i=0;$i<size($JUN_list_attr_old);$i++)
+    {
+        // if exist "." in $JUN_list_attr_old[$i] -> ignore
+        if(JUN_is_exist($JUN_list_attr_old[$i], "\\.")) continue;
+
+        // get "obj.attr"
+        string $fullName_compund = $JUN_objs_src[0] + "." + $JUN_list_attr_old[$i];
+        int $indx_freeToConnect;
+        if(catchQuiet($indx_freeToConnect = getNextFreeMultiIndex($fullName_compund, 0)))
+        {
+            // if is not compound attribute
+            // push $JUN_list_attr_old[$i] to $JUN_list_attr_new
+
+            stringArrayInsertAtIndex(size($JUN_list_attr_new), $JUN_list_attr_new, $JUN_list_attr_old[$i]);
+        }
+        else
+        {
+            // if exist object.attr[?]
+            // push
+            // object.attr[?].A
+            // object.attr[?].B
+            // object.attr[?].C ...
+            // to $JUN_list_attr_new
+
+            string $JUN_list_compund[] = `listAttr -multi ($JUN_objs_src[0]+"."+$JUN_list_attr_old[$i]+"["+(string)$indx_freeToConnect+"]")`;
+            appendStringArray($JUN_list_attr_new, $JUN_list_compund, size($JUN_list_compund));
+        }
+    }
+    JUN_cmd_upd_tsl_append_list($JUN_name_tsl_attr, $JUN_list_attr_new);
+}
+
+global proc JUN_cmd_upd_tsl_search(string $name_tsl_attr,
+                                   string $name_tfg_searchInput,
+                                   string $name_tsl_obj)
+{
+    string $attr_all[] = `textScrollList -q -allItems $name_tsl_attr`;
+    string $search_input = `textField -q -tx $name_tfg_searchInput`;
+    string $que[];
+    for($attr in $attr_all)
+        if(JUN_is_exist($attr, $search_input))
+            JUN_appendString($que, $attr);
+
+    textScrollList -e -deselectAll $name_tsl_attr;
+
+    if(size($que)>0)
+        for($item in $que)
+            textScrollList -e -selectItem $item $name_tsl_attr;
+    else
+        JUN_cmd_upd_tsl_attr($name_tsl_obj, $name_tsl_attr, $search_input);
+}
+
+
+//update both obect and attribute tsl
+global proc JUN_cmd_upd_tsl_obj_n_attr(string $JUN_name_tsl_obj,
+                                       string $JUN_name_tsl_attr,
+                                       string $JUN_name_tex_numSrc)
+{
+    textScrollList -e -removeAll $JUN_name_tsl_attr;
+    JUN_cmd_upd_tex_numTsl($JUN_name_tsl_obj, $JUN_name_tex_numSrc);
+    JUN_cmd_upd_tsl_attr($JUN_name_tsl_obj, $JUN_name_tsl_attr, "");
+}
+
+
+global proc JUN_cmd_makeStretch(string $name_tsl_defaultDist,
+                                string $name_tsl_attr_defaultDist,
+                                string $name_tsl_stretchObjs,
+                                string $name_tsl_attr_stretchObjs)
+{
+    string $objs_defDist[] = `textScrollList -q -allItems $name_tsl_defaultDist`;
+    string $attrs_defDist[] = `textScrollList -q -selectItem $name_tsl_attr_defaultDist`;
+    string $objs_strcObjs[] = `textScrollList -q -allItems $name_tsl_stretchObjs`;
+    string $attrs_strcObjs[] = `textScrollList -q -selectItem $name_tsl_attr_stretchObjs`;
+    int $objs_siz = size($objs_defDist) > size($objs_strcObjs) ? size($objs_strcObjs) : size($objs_defDist);
+
+    if(size($objs_defDist) == 1) // 1 -> n
+    {
+        for($i=0;$i<size($objs_strcObjs);$i++)
+        {
+            // create animCrv 
+            float $dist = `getAttr ($objs_defDist[0]+"."+$attrs_defDist[0])`;
+            setDrivenKeyframe -driverValue $dist -value 1 -currentDriver ($objs_defDist[0]+"."+$attrs_defDist[0] ) ($objs_strcObjs[$i]+"."+$attrs_strcObjs[0]);
+
+            JUN_stretch_aimCrv($objs_strcObjs[$i], $attrs_strcObjs[0], $dist);
+        }
+    }
+    else
+        for($i=0;$i<$objs_siz;$i++) // n -> n
+        {
+            float $dist = `getAttr ($objs_defDist[$i]+"."+$attrs_defDist[0])`;
+            setDrivenKeyframe -driverValue $dist -value 1 -currentDriver ($objs_defDist[$i]+"."+$attrs_defDist[0] ) ($objs_strcObjs[$i]+"."+$attrs_strcObjs[0]);
+
+            JUN_stretch_aimCrv($objs_strcObjs[$i], $attrs_strcObjs[0], $dist);
+        }
+
+}
+
+
+//===================================================================================
+//===================================================================================
+// UI : All Window
+//===================================================================================
+//===================================================================================
+
+global proc JUN_makeUI_MEL_Stretch_Tool()
+{
+    string $winTitle = "Stertch Tool V01";
+    string $winName = "junnyWin_Stretch_Tool_Window";
+    int $win_width = 480;
+    int $win_hight = 800;
+    int $tsl_hight = (int)($win_hight * 0.3);
+    int $tsl_hight_tab2 = (int)($win_hight * 0.27);
+    if(`window -exists $winName`)
+        deleteUI $winName;
+    $winName = `window -title $winTitle	
+                       -menuBar 1 
+                       -resizeToFitChildren true`;
+
+    menu     -label "Help"  -parent $winName;
+	menuItem -label "About" -command "confirmDialog -title (\"About\") -messageAlign \"left\" -message (\"Written by Ji Hun Park \\n Update date : 28-Feb-2022\") ";
+
+    //-------------------------------------------------
+    // UI: Text Scroll List
+    //-------------------------------------------------
+
+    string $Whole_form = `columnLayout -adjustableColumn true -columnAttach "both" 10`;
+
+
+        string $tabLayout_All = `tabLayout`;
+        
+            //-------------------------------------------------
+            // tab 1 : Curve, Joint Tool
+            //-------------------------------------------------
+            string $tabLayout_Curve = `columnLayout -adjustableColumn true 
+                                                    -columnAttach "both" 5 
+                                                    -rowSpacing 5`;
+                frameLayout -collapsable true
+                            -bgc 0.265625 0.265625 0.265625
+                            -label "Tool : Distance"; 
+
+                    paneLayout -configuration "vertical2";
+
+                        // Start Objects
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                            text -align "left" -label "Start";
+                            string $name_tex_numTgt = `text -align "left" -label "Number : 0"`;
+                            string $name_tsl_start = `textScrollList -h $tsl_hight -numberOfRows 5 -allowMultiSelection true`;
+                            textScrollList -e -selectCommand ("JUN_cmd_tsl_select(\"" + $name_tsl_start +"\")") $name_tsl_start;
+
+                            columnLayout -adjustableColumn true -rowSpacing 8;
+                                button -label "Select" 
+                                    -bgc 0 0.6 0
+                                    -command ("JUN_cmd_upd_tex_numTsl(\""+$name_tsl_start+"\", \""+ $name_tex_numTgt +"\")");
+                            setParent..;
+
+                            rowLayout -nc 4;
+                                button -label "Add" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_append_selected(\""+$name_tsl_start+"\")");
+                                button -label "Delete" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_delete_selected(\""+$name_tsl_start+"\")");
+                                button -label "Up" // 1
+                                    -width ($win_width/8 - 8)
+                                    -command ("JUN_cmd_selMov(\""+$name_tsl_start+"\"," + 1 + ")");
+                                button -label "down" //0
+                                    -width ($win_width/8 - 8)
+                                    -command ("JUN_cmd_selMov(\""+$name_tsl_start+"\"," + 0 + ")");
+                            setParent ..;
+
+                        // columnLayout : Start Objects (close)
+                        setParent ..;
+
+                        // End Objects
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                            text -align "left" -label "End";
+                            string $name_tex_numFlw = `text -align "left" -label "Number : 0"`;
+                            string $name_tsl_end = `textScrollList -h $tsl_hight -numberOfRows 5 -allowMultiSelection true`;
+                            textScrollList -e -selectCommand ("JUN_cmd_tsl_select(\"" + $name_tsl_end +"\")") $name_tsl_end;
+
+                            columnLayout -adjustableColumn true -rowSpacing 8;
+                                button -label "Select" 
+                                    -bgc 0 0.6 0
+                                    -command ("JUN_cmd_upd_tex_numTsl(\""+$name_tsl_end+"\", \""+ $name_tex_numFlw +"\")");
+                            setParent..;
+                            
+                            rowLayout -nc 4;
+                                button -label "Add" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_append_selected(\""+$name_tsl_end+"\")");
+                                button -label "Delete" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_delete_selected(\""+$name_tsl_end+"\")");
+                                button -label "Up" // 1
+                                    -width ($win_width/8 - 8)
+                                    -command ("JUN_cmd_selMov(\""+$name_tsl_end+"\"," + 1 + ")");
+                                button -label "down" //0
+                                    -width ($win_width/8 - 8)
+                                    -command ("JUN_cmd_selMov(\""+$name_tsl_end+"\"," + 0 + ")");
+                            setParent ..;
+
+                        // columLayout : End Objects (close)
+                        setParent ..;
+
+                    // paneLayout vertical2 (close)
+                    setParent ..;
+
+                    // columnLayout : Add Objects to both textScrollList (open)
+                    columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                        rowLayout -nc 3;
+                            button -label "Select Start End" 
+                                -width ($win_width/4 - 25)
+                                -command ("JUN_cmd_selStrEnd(\""+$name_tsl_start+"\",\""+$name_tsl_end+"\")");
+                            button -label "Add Start End" 
+                                -width ($win_width/4 - 25)
+                                -command ("JUN_cmd_addStrEnd(\""+$name_tsl_start+"\",\""+$name_tsl_end+"\")");
+                            button -label "Make Distance" 
+                                -width ($win_width/4 - 25)
+                                -command ("JUN_cmd_makeDist(\""+$name_tsl_start+"\",\""+$name_tsl_end+"\")");
+                        setParent ..;
+
+                    // columnLayout (close)
+                    setParent ..;
+
+                // frameLayout : Toool Divide (close)
+                setParent ..;
+                
+
+            //-------------------------------------------------
+            // columnLayout : tab 1 (close)
+            //-------------------------------------------------
+            setParent..;
+
+            //-------------------------------------------------
+            // tab 2 : Stretch(open)
+            //-------------------------------------------------
+
+            string $tabLayout_Divide = `columnLayout -adjustableColumn true 
+                                                    -columnAttach "both" 5 
+                                                    -rowSpacing 5`;
+                    
+                //-------------------------------------------------
+                // frameLayout A :  Distance Objects(open)
+                //-------------------------------------------------
+                frameLayout -collapsable true 
+                            -bgc 0.265625 0.265625 0.265625
+                            -marginHeight 5
+                            -label "Default Distance"; 
+
+                    string $name_tex_numSrc = `text -align "left" -label "Number : 0"`;
+                    paneLayout -configuration "vertical2";
+
+                        // columnLayout : Distance Objects(open)
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                            text -align "left" -label "Distance Objects";
+                            string $name_tsl_defaultDist = `textScrollList -h $tsl_hight_tab2 -numberOfRows 5 -allowMultiSelection true`;
+                            textScrollList -e -selectCommand ("JUN_cmd_tsl_select(\"" + $name_tsl_defaultDist +"\")") $name_tsl_defaultDist;
+
+                            rowLayout -nc 4;
+                                button -label "Add" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_append_selected(\""+$name_tsl_defaultDist+"\")");
+                                button -label "Delete" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_delete_selected(\""+$name_tsl_defaultDist+"\")");
+                                button -label "Up" // 1
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_selMov(\""+$name_tsl_defaultDist+"\"," + 1 + ")");
+                                button -label "down" // 0
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_selMov(\""+$name_tsl_defaultDist+"\"," + 0 + ")");
+                            setParent ..;
+
+                            string $name_btn_selSrcObjs = `button -label "Select Default Distance"
+                                                                  -align "center"`;
+
+                        // columnLayout : Distance Objects (close)
+                        setParent ..;
+
+                        // columnLayout : Distance Object's Attributs(open)
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+
+                            text -align "left" -label "Attributes";
+                            string $name_tsl_attr_defaultDist = `textScrollList -h $tsl_hight_tab2 -numberOfRows 5 -allowMultiSelection true`;
+                            string $name_tf_searchDefDistAttr = `textField -alwaysInvokeEnterCommandOnReturn 1`;
+                            string $name_btm_serch_fromTfg = `button -label "Search" -align "center"`;
+                        // columLayout : Distance Object's Attributs (close)
+                        setParent ..;
+
+
+                    // paneLayout vertical2 (close)
+                    setParent ..;
+                
+                // edit buttons
+                textField -e -enterCommand ("JUN_cmd_upd_tsl_search(\""+$name_tsl_attr_defaultDist+"\",\""+$name_tf_searchDefDistAttr+"\",\""+$name_tsl_defaultDist+"\")") $name_tf_searchDefDistAttr;
+                button -e -command ("JUN_cmd_upd_tsl_obj_n_attr(\""+$name_tsl_defaultDist+"\", \""+ $name_tsl_attr_defaultDist + "\",\"" + $name_tex_numSrc + "\")") $name_btn_selSrcObjs;
+                button -e -command ("JUN_cmd_upd_tsl_search(\""+$name_tsl_attr_defaultDist+"\",\""+$name_tf_searchDefDistAttr+"\",\""+$name_tsl_defaultDist+"\")") $name_btm_serch_fromTfg;
+                    
+                //-------------------------------------------------
+                // frameLayout A :  Distance Objects(close)
+                //-------------------------------------------------
+                setParent ..;
+            
+                //-------------------------------------------------
+                // frameLayout B : Stretch Objects(open)
+                //-------------------------------------------------
+                frameLayout -collapsable true
+                            -bgc 0.265625 0.265625 0.265625
+                            -marginHeight 5
+                            -label "Stretch Object"; 
+
+                    string $name_tex_numDist = `text -align "left" -label "Number : 0"`;
+                    paneLayout -configuration "vertical2";
+
+                        // columnLayout : Stretch Objects(open)
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                            text -align "left" -label "Stertch Objects";
+                            string $name_tsl_stretchObjs = `textScrollList -h $tsl_hight_tab2 -numberOfRows 5 -allowMultiSelection true`;
+                            textScrollList -e -selectCommand ("JUN_cmd_tsl_select(\"" + $name_tsl_stretchObjs +"\")") $name_tsl_stretchObjs;
+
+                            rowLayout -nc 4;
+                                button -label "Add" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_append_selected(\""+$name_tsl_stretchObjs+"\")");
+                                button -label "Delete" 
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_delete_selected(\""+$name_tsl_stretchObjs+"\")");
+                                button -label "Up" // 1
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_selMov(\""+$name_tsl_stretchObjs+"\"," + 1 + ")");
+                                button -label "down" // 0
+                                        -width ($win_width/8 - 12)
+                                        -command ("JUN_cmd_selMov(\""+$name_tsl_stretchObjs+"\"," + 0 + ")");
+                            setParent ..;
+
+                            string $name_btn_distObjs = `button -label "Select Stretch Objects" 
+                                                                -align "center"`;
+
+                        // columnLayout : Stretch Objects (close)
+                        setParent ..;
+
+                        // columnLayout : Stretch Object's Attributs(open)
+                        columnLayout -adjustableColumn true -columnAttach "both" 5 -rowSpacing 5;
+                            text -align "left" -label "Attributes";
+                            string $name_tsl_attr_stretchObjs = `textScrollList -h $tsl_hight_tab2 -numberOfRows 5 -allowMultiSelection true`;
+                            string $name_tf_searchStrcAttr = `textField -alwaysInvokeEnterCommandOnReturn 1`;
+                            string $name_btn_serch_distAttr = `button -label "Search" -align "center"`;
+                        // columLayout : Stretch Object's Attributs (close)
+                        setParent ..;
+                    // paneLayout vertical2 (close)
+                    setParent ..;
+
+                //edit 
+                textField -e -enterCommand ("JUN_cmd_upd_tsl_search(\""+$name_tsl_attr_stretchObjs+"\",\""+$name_tf_searchStrcAttr+"\",\""+$name_tsl_stretchObjs+"\")") $name_tf_searchStrcAttr;
+                button -e -command ("JUN_cmd_upd_tsl_obj_n_attr(\""+$name_tsl_stretchObjs+"\", \""+ $name_tsl_attr_stretchObjs + "\",\"" + $name_tex_numDist + "\")") $name_btn_distObjs;
+                button -e -command ("JUN_cmd_upd_tsl_search(\""+$name_tsl_attr_stretchObjs+"\",\""+$name_tf_searchStrcAttr+"\",\""+$name_tsl_stretchObjs+"\")") $name_btn_serch_distAttr;
+
+                //-------------------------------------------------
+                // frameLayout B :  Distination Objects(close)
+                //-------------------------------------------------
+                setParent ..;
+
+                columnLayout -adjustableColumn true  -columnAttach "both" 5 -rowSpacing 10;
+                   button -label "Apply Stretch" 
+                                -width ($win_width - 10)
+                                -command ("JUN_cmd_makeStretch(\""+$name_tsl_defaultDist+"\",\""+$name_tsl_attr_defaultDist+"\",\""+$name_tsl_stretchObjs+"\",\""+$name_tsl_attr_stretchObjs+"\")");
+                setParent..;
+
+            //-------------------------------------------------
+            // columnLayout : tab 2 (close)
+            //-------------------------------------------------
+            setParent ..;
+        
+        //-------------------------------------------------
+        // tabLayout_All (close)
+        //-------------------------------------------------
+         setParent ..;
+
+    tabLayout -e
+              -tabLabel $tabLayout_Curve "Distance"
+              -tabLabel $tabLayout_Divide "Stretch"
+              $tabLayout_All;
+              
+    text -align "right" -label "Copyright (c) Ji Hun Park. All rights reserved.";
+
+    //-------------------------------------------------
+    // columeLayout : Whole_form (close)
+    //-------------------------------------------------
+    setParent ..;
+    showWindow $winName;
+    window -e -wh $win_width $win_hight $winName;
+}
+
+JUN_makeUI_MEL_Stretch_Tool();

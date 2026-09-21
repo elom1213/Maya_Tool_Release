@@ -1,6 +1,6 @@
 # Python Script by Ji Hun Park
-# last Update date : 2026-06-18
+# last Update date : 2026-08-03
 # A00210_FileManager - version info
 
-VERSION = "01.07"
-LAST_UPDATE = "2026-06-18"
+VERSION = "01.31"
+LAST_UPDATE = "2026-09-18"
