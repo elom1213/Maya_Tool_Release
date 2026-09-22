@@ -57,6 +57,13 @@ cd /d "%~dp0%REPO_DIR%"
 :run_setup
 echo.
 py scripts\update.py
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Update failed - see the message above.
+    echo         Nothing was registered into Maya. Fix it and run this again.
+    pause
+    exit /b 1
+)
 py scripts\setup_app_dir.py
 echo.
 echo ========================================
