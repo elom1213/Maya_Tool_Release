@@ -33,5 +33,27 @@
 #                   (Values... edits the list). Profile Dnable_Set_v001 uses it for character /
 #                   side / part / type. Team naming rule doc: docs/A00330_NamingRule_Set.md (v01.12)
 
-VERSION = "01.12"
+#   - Token       : every token's input box (text / Enum value / Start / Pad 0) has the same height
+#                   and sits on the same row - each column has a caption row above it (v01.13)
+
+#   - Token       : outside developer mode (the shared release) the fixed rules cannot be changed -
+#                   no Values... button, an Enum token's rule is locked and it cannot be deleted (v01.14)
+
+#   - Token       : Preview table next to the Objects list (like Quick Rename > Insert) - every node
+#                   that Rename will touch, as a tree, with Current / New name / Status. Rename now
+#                   skips locked / referenced nodes instead of stopping, and refreshes the list (v01.15)
+
+#   - Token       : the Preview table's three columns have their own colors (blue / purple / gray),
+#                   header included, so Current, New name and Status are easy to tell apart (v01.16)
+
+#   - Release view: no Add Token / Delete Token, and only Rename > Token can be used (the other
+#                   tabs are locked). In developer mode a Dev Mode toggle switches between the
+#                   developer view and the release view (v01.17)
+
+#   - Token       : Hierarchy check box next to Rename - on: the listed objects and their transform
+#                   descendants (as before), off: only the listed objects (v01.18)
+
+#   - Release view: the other tabs are hidden instead of grayed out. Hierarchy is off by default (v01.19)
+
+VERSION = "01.19"
 LAST_UPDATE = "2026-10-02"

@@ -1,5 +1,66 @@
 # Changelog — A00330_NamingTool
 
+## v01.19 (2026-10-02)
+**[Change] 배포 화면 - Token 말고 다른 탭은 아예 보이지 않는다** (v01.17 은 회색으로 잠갔다 - 탭이 있다는 게 보였다).
+- `setTabVisible`(Qt 5.15+, Maya 2022+), 없으면 removeTab / insertTab 으로 원래 자리 · 툴팁 그대로 되돌린다. Dev Mode 토글도 같다.
+
+**[Change] Token 탭 `Hierarchy` 기본값 꺼짐** — 리스트에 담은 오브젝트만 바뀐다. 자손까지 바꾸려면 켠다.
+
+## v01.18 (2026-10-02)
+**[Add] Token 탭 - `Hierarchy` 체크 (Rename 왼쪽).**
+
+- 켜짐(기본, 예전 동작): 리스트 오브젝트와 그 transform 자손까지 rename. 꺼짐: 리스트 오브젝트만, 자손은 그대로.
+- Preview 표도 체크를 따라간다. `core.build_hierarchy_groups` · `rename_tokens` · `preview_tokens` 에 `hierarchy` 인자(기본 True).
+- 팀 문서 5-2: 지오메트리 아래에 다른 오브젝트가 붙어 있으면 Hierarchy 를 끈다.
+
+## v01.17 (2026-10-02)
+**[Change] 배포 화면 - Add / Delete Token 없음, Rename > Token 탭만 쓸 수 있다. 개발자 모드에 `Dev Mode` 토글.**
+
+- 배포본(또는 Dev Mode 꺼짐): `Add Token` / `Delete Token` 숨김. Set Rename · Copy Name · Quick Rename 탭은 회색으로 잠기고
+  툴팁에 `Not available in the shared tool - use Rename > Token.` 잠글 때 Rename > Token 으로 옮긴다.
+- 개발자 모드에서만 Tokens 줄 오른쪽에 **`Dev Mode`** 토글 — 끄면 배포 화면, 켜면 개발 화면. 지금 칸 · 저장 안 한 변경은 그대로.
+- 공용 위젯: `mode_toggle` 인자 · `set_rules_editable()` · 신호 `rulesEditableChanged(bool)`. A00480 은 기본값이라 그대로.
+- 팀 문서: 그룹 이름은 Quick Rename 대신 **마야에서 직접**(배포본에서 Quick Rename 이 잠기므로), 공유 툴은 Token 탭만.
+
+## v01.16 (2026-10-02)
+**[Change] Token 탭 Preview 표 - 세 칸의 색을 다르게.** Current = 파랑, New name = 보라, Status = 회색(머리글 포함).
+
+- 반투명 배경이라 테마 바탕 · 줄 바꿈 색 위에 얹힌다. 어두운 테마는 alpha 70, 밝은 테마는 50(같은 값이면 어두운 바탕에서 거의 안 보였다).
+- Status 글자색(OK 초록 · name taken 노랑 · 오류 빨강)과 겹치지 않는 색 계열.
+- 머리글은 테마 qss 가 배경을 덮어써서(brown_dark) 테마가 그린 위에 색을 덧칠하는 `TintedHeader` 로.
+
+## v01.15 (2026-10-02)
+**[Add] Token 탭 - Preview 표 (Quick Rename > Insert 와 같은 모양).**
+
+- Objects 리스트 오른쪽에 `Current` / `New name` / `Status` 표. Rename 이 바꿀 노드 전부(오브젝트 + transform 자손)를
+  **계층 그대로** 보여 준다. 리스트 · 토큰 칸이 바뀌면 다시 계산한다(씬은 그대로, 150ms 모아서).
+- Status: `OK` · `name taken`(이름을 차례로 바꾸는 과정을 흉내 내서 판정) · `no change` · `token error` · `invalid name` ·
+  `locked` · `referenced` · `default node` · `gone`. 색은 Insert 탭과 같다.
+- 계산 `core.preview_tokens` = `rename_tokens` 와 같은 순서 · 같은 이름 (Maya 2024 에서 미리보기와 실제 결과 대조).
+
+**[Fix] Token 탭 Rename**
+- 잠긴 · 레퍼런스 노드에서 `RuntimeError` 로 **그 자리에서 멈추던** 것 → 그 노드만 건너뛰고 `[Warning]` 로그.
+- Rename 뒤 Objects 리스트를 새 이름으로 갱신(Insert 탭과 같다). 대상은 표시 이름이 아니라 UUID 로 찾은 지금 경로.
+
+## v01.14 (2026-10-02)
+**[Change] 배포본에서는 정해진 규칙(Enum 칸)을 바꿀 수 없다 — `Values...` 는 개발자 모드에서만.**
+
+- 개발자 모드(`JUN_All/config.py` 의 `DEV_MODE = True`)일 때만 Enum 칸에 `Values...` 가 있다.
+- 배포본(툴 폴더에 Framework 동봉 = 릴리즈 저장소) 또는 `DEV_MODE = False` 이면:
+  `Values...` 없음 · Enum 칸 규칙 콤보 잠김 · Enum 칸 `Delete Token` 막음(`[WARN]`) · 다른 칸 규칙 콤보에서 Enum 제외.
+  값 고르기 · Custom · Numbering · Add Token · Save 는 그대로.
+- 판정 `app/config/dev_mode.py`(launch.py 와 같은 규칙). 공용 위젯에 `rules_editable` 인자(기본 True — A00480 은 그대로).
+- 팀 문서 `docs/A00330_NamingRule_Set.md` 5장: 규칙 칸은 바꿀 수 없다 · 규칙 변경은 툴 관리자가 업데이트로.
+
+## v01.13 (2026-10-02)
+**[Fix] Token 탭 - 칸마다 입력칸 높이 · 위치가 달랐던 것 (`ref/ref_02.png`).**
+
+- 높이: Enum 값 콤보가 다른 입력칸보다 낮았다(80px 칸에 글자를 넣으려고 padding 을 줄였기 때문). 이제 글자 칸 · Enum 값 ·
+  Start · Pad 0 · Set's Name 이 **같은 높이** — 테마를 입힌 QLineEdit / QSpinBox 중 큰 높이로 맞추고, 테마가 바뀌면 다시 맞춘다.
+- 위치: Enum(`character`) · Numbering(`Start`) 칸은 입력칸 위에 이름 줄이 있고 Custom 은 없어서, Custom 입력칸이 한 줄 위에 붙었다.
+  이제 모든 칸에 이름 줄이 있다(Custom = `Text`, Set's Name = `Set`).
+- 실측(brown_dark · green_light · dark): 6칸의 입력칸 y · 높이가 모두 같다. 공용 위젯 수정 — A00480 Export > Naming 의 칸 줄 높이는 전후 같다(163px).
+
 ## v01.12 (2026-10-02)
 **[Add] Token 탭 - `Enum` 규칙: 정해진 값 중 하나를 콤보로 고른다(타이핑하지 않는다).**
 

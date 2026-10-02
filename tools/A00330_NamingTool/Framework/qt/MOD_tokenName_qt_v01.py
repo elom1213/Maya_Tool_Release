@@ -11,6 +11,10 @@
 #   - Tokens  : 칸마다 규칙 콤보 (Custom / Enum / Numbering / Set's Name - 툴이 고른 것만).
 #               Enum (2026-10-02) : 정해진 값 중 하나를 콤보로 고른다. 칸 이름(role) 은 콤보 위에,
 #               값 목록 · 칸 이름은 `Values...` 로 고친다 (Save 를 눌러야 프로파일에 남는다).
+#               rules_editable=False (배포본, A00330 v01.14) : `Values...` 가 없고, Enum 칸은 규칙을 못 바꾸고
+#               지울 수 없다 - 공유받은 사람은 정해진 값 중에서 고르기만 한다.
+#               v01.17 : 배포본에서는 `Add Token` / `Delete Token` 도 없다 - 칸 구성 자체가 정해진 규칙이다.
+#               mode_toggle=True (개발자 모드에서만) : `Dev Mode` 토글 버튼 - 개발 / 배포 화면을 번갈아 본다.
 #               칸 머리(Token N)를 눌러 고른 뒤
 #                 Add Token    : 고른 칸 **오른쪽**에 새 칸
 #                 Delete Token : 고른 칸 삭제 (마지막 한 칸은 남긴다)
@@ -98,10 +102,11 @@ class TokenColumn(QFrame):
     Custom 글자 · Enum 값 콤보 · Numbering Start + Pad 0 · Set's Name(입력 없음 - 안내 글자만).
     """
 
-    def __init__(self, token, ruleset, on_changed, parent=None):
+    def __init__(self, token, ruleset, on_changed, rules_editable=True, parent=None):
         super().__init__(parent)
         self._ruleset = ruleset
         self._on_changed = on_changed
+        self._rules_editable = rules_editable
         self._pages = {}          # rule key -> stack index
         self._enum_values = []    # Enum 값 목록 (콤보 항목과 같다)
         self._enum_role = ""      # Enum 칸 이름 - 이름에는 안 들어간다
@@ -132,19 +137,21 @@ class TokenColumn(QFrame):
 
         self.stack = QStackedWidget()
 
+        # 규칙별 페이지는 모두 [이름 줄] -> [입력칸] 순서다 (2026-10-02). 이름 줄이 없는 페이지가 있으면
+        # 입력칸이 한 줄 위로 붙어 옆 칸과 어긋난다(ref_02.png - Custom 의 SetXXX 가 Enum 의 CHN 보다 위).
+        # 입력칸 높이는 _match_input_heights 가 하나로 맞춘다.
+
         # Custom
         self.le_text = QLineEdit()
         self.le_text.setPlaceholderText("text")
-        custom_page = QWidget()
-        custom_layout = QVBoxLayout(custom_page)
-        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_page, custom_layout = self._new_page()
+        custom_layout.addWidget(self._caption("Text"))
         custom_layout.addWidget(self.le_text)
         custom_layout.addStretch(1)
         self._add_page("custom", custom_page)
 
         # Enum - 칸 이름 / 값 콤보 / Values... (Numbering 페이지 4줄보다 낮아 칸 높이는 그대로)
-        self.lbl_role = QLabel()
-        self.lbl_role.setAlignment(Qt.AlignCenter)
+        self.lbl_role = self._caption("")
         self.cmb_value = QComboBox()
         self.cmb_value.setStyleSheet(
             "QComboBox { padding: 1px 1px; } QComboBox::drop-down { width: 12px; }")
@@ -153,10 +160,7 @@ class TokenColumn(QFrame):
         self.btn_values.setStyleSheet("QPushButton { padding: 2px; }")
         self.btn_values.setToolTip("Edit this token's name and the list of values.")
         self.btn_values.clicked.connect(self._edit_enum_values)
-        enum_page = QWidget()
-        enum_layout = QVBoxLayout(enum_page)
-        enum_layout.setContentsMargins(0, 0, 0, 0)
-        enum_layout.setSpacing(1)
+        enum_page, enum_layout = self._new_page()
         enum_layout.addWidget(self.lbl_role)
         enum_layout.addWidget(self.cmb_value)
         enum_layout.addWidget(self.btn_values)
@@ -171,30 +175,32 @@ class TokenColumn(QFrame):
         self.sp_pad = QSpinBox()
         self.sp_pad.setRange(0, 10)
         self.sp_pad.setToolTip("Zero padding - 2 gives 00, 01, 02 ...")
-        number_page = QWidget()
-        number_layout = QVBoxLayout(number_page)
-        number_layout.setContentsMargins(0, 0, 0, 0)
-        number_layout.setSpacing(1)
-        number_layout.addWidget(QLabel("Start"))
+        number_page, number_layout = self._new_page()
+        number_layout.addWidget(self._caption("Start"))
         number_layout.addWidget(self.sp_start)
-        number_layout.addWidget(QLabel("Pad 0"))
+        number_layout.addWidget(self._caption("Pad 0"))
         number_layout.addWidget(self.sp_pad)
+        # 다른 페이지처럼 아래 stretch - 없으면 남는 높이가 이름 줄로 나뉘어 입력칸이 6px 내려간다(실측)
+        number_layout.addStretch(1)
         self._add_page("numbering", number_page)
 
         # Set's Name - 입력 없음. 칸이 무엇으로 채워지는지만 보인다.
-        setname_page = QWidget()
-        setname_layout = QVBoxLayout(setname_page)
-        setname_layout.setContentsMargins(0, 0, 0, 0)
+        setname_page, setname_layout = self._new_page()
         self.le_setname = QLineEdit(ruleset.sample_context)
         self.le_setname.setEnabled(False)
         self.le_setname.setToolTip("Filled with each set's name.")
+        setname_layout.addWidget(self._caption("Set"))
         setname_layout.addWidget(self.le_setname)
         setname_layout.addStretch(1)
         self._add_page("setname", setname_page)
 
         layout.addWidget(self.stack)
 
+        # 높이를 맞출 입력칸 - 값이 보이는 칸 전부
+        self._inputs = (self.le_text, self.cmb_value, self.sp_start, self.sp_pad, self.le_setname)
+
         self.set_token(token)
+        self._apply_rule_lock()
 
         self.combo.currentIndexChanged.connect(self._on_rule_changed)
         self.le_text.textChanged.connect(self._emit)
@@ -202,8 +208,68 @@ class TokenColumn(QFrame):
         self.sp_pad.valueChanged.connect(self._emit)
         self.cmb_value.currentIndexChanged.connect(self._emit)
 
+    @staticmethod
+    def _new_page():
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(1)
+        return page, page_layout
+
+    @staticmethod
+    def _caption(text):
+        """입력칸 위 이름 줄 (Text / character / Start ...). 모든 페이지가 같은 모양."""
+        label = QLabel(text)
+        label.setAlignment(Qt.AlignCenter)
+        return label
+
+    def _match_input_heights(self):
+        """입력칸(글자 · Enum 값 · 스핀박스) 높이를 하나로 (2026-10-02, ref_02.png).
+
+        Enum 값 콤보는 80px 칸에 글자가 들어가도록 padding 을 줄여서 테마 그대로인 QLineEdit /
+        QSpinBox 보다 낮았다. 테마마다 높이가 다르므로 고정값이 아니라 **테마를 입힌 뒤의**
+        QLineEdit · QSpinBox 높이 중 큰 값으로 맞춘다 (테마가 바뀌면 다시 맞춘다).
+        """
+        if not getattr(self, "_inputs", None):
+            return
+        for widget in self._inputs:
+            widget.ensurePolished()
+        height = max(self.le_text.sizeHint().height(), self.sp_start.sizeHint().height())
+        for widget in self._inputs:
+            if widget.minimumHeight() != height or widget.maximumHeight() != height:
+                widget.setFixedHeight(height)
+
+    def event(self, event):
+        if event.type() in (QEvent.Polish, QEvent.StyleChange, QEvent.Show):
+            self._match_input_heights()
+        return super().event(event)
+
     def _add_page(self, key, page):
         self._pages[key] = self.stack.addWidget(page)
+
+    def is_enum(self):
+        return self.combo.currentData() == "enum"
+
+    def _apply_rule_lock(self):
+        """rules_editable=False 면 정해진 규칙(Enum 칸)을 못 바꾸게 한다 (배포본).
+
+        - `Values...` 를 숨긴다 - 칸 이름 · 값 목록 편집 불가.
+        - Enum 칸은 규칙 콤보를 잠근다 - Custom 으로 바꿔 아무 글자나 넣는 길을 막는다.
+        - Enum 이 아닌 칸의 규칙 콤보에서는 Enum 을 뺀다 - 값 목록을 만들 수 없으니 빈 Enum 만 생긴다.
+        Enum 칸 삭제는 위젯(on_delete_token)이 막는다.
+        """
+        if self._rules_editable:
+            return
+        self.btn_values.hide()
+        if self.is_enum():
+            self.combo.setEnabled(False)
+            self.combo.setToolTip("This token is a fixed rule - pick one of its values below.")
+            return
+        index = self.combo.findData("enum")
+        if index >= 0:
+            self.combo.blockSignals(True)
+            self.combo.removeItem(index)
+            self.combo.blockSignals(False)
 
     def _show_page(self):
         self.stack.setCurrentIndex(self._pages.get(self.combo.currentData(), 0))
@@ -284,6 +350,11 @@ class JUN_mod_tokenName_qt_v01(QWidget):
                  False = 테두리 없이, Profile 과 Add / Delete Token 을 **한 줄**에 - 이미 그룹 박스
                  안에 넣을 때, 세로 공간을 아낄 때 (A00480 Export > Naming).
 
+    rules_editable : False = 배포본처럼 정해진 규칙을 못 바꾸게 (Enum 칸의 Values... 없음 · 규칙 잠금 ·
+                 삭제 불가 · Add / Delete Token 없음). 툴이 개발자 모드 여부로 넘긴다 (A00330 v01.14, v01.17).
+    mode_toggle : True = `Dev Mode` 토글 버튼을 단다 - 켜면 개발 화면, 끄면 배포 화면 (A00330 v01.17).
+                 개발자 모드인 툴만 True 로 넘긴다 (배포본에는 버튼이 없다). set_rules_editable() 로도 바꾼다.
+
     preview_row : 미리보기 줄 QHBoxLayout - 툴 버튼을 오른쪽에 붙일 자리.
 
     신호 tokensChanged(list) : 칸이 바뀔 때마다(프로파일 전환 포함) 지금 토큰 목록.
@@ -294,9 +365,17 @@ class JUN_mod_tokenName_qt_v01(QWidget):
 
     tokensChanged = Signal(list)
 
-    def __init__(self, store, log=None, log_prefix="Token", framed=True, parent=None):
+    #: 개발 / 배포 화면이 바뀔 때 (set_rules_editable · Dev Mode 토글). True = 개발 화면.
+    #: 툴이 배포 화면에 맞춰 다른 UI 를 막는 데 쓴다 (A00330 v01.17 - Token 말고 다른 탭 잠금).
+    rulesEditableChanged = Signal(bool)
+
+    def __init__(self, store, log=None, log_prefix="Token", framed=True, rules_editable=True,
+                 mode_toggle=False, parent=None):
         super().__init__(parent)
         self.store = store
+        self._rules_editable = rules_editable
+        self._mode_toggle = mode_toggle
+        self.btn_dev_mode = None
         self.ruleset = store.ruleset
         self._log_callback = log
         self._prefix = log_prefix
@@ -311,6 +390,7 @@ class JUN_mod_tokenName_qt_v01(QWidget):
         self.build_ui()
         self.load_tokens(store.load_profile(self._profile))
         self._refresh_profiles()
+        self._apply_mode_buttons()
 
     # ================================================================
     # UI
@@ -329,6 +409,7 @@ class JUN_mod_tokenName_qt_v01(QWidget):
             buttons = QHBoxLayout()
             self._add_token_buttons(buttons)
             buttons.addStretch(1)
+            self._add_mode_toggle(buttons)
             token_layout.addLayout(buttons)
             self._add_token_area(token_layout)
             root.addWidget(token_box)
@@ -340,6 +421,7 @@ class JUN_mod_tokenName_qt_v01(QWidget):
         self._add_profile_widgets(row)
         row.addSpacing(16)
         self._add_token_buttons(row)
+        self._add_mode_toggle(row)
         root.addLayout(row)
         self._add_token_area(root)
 
@@ -382,6 +464,57 @@ class JUN_mod_tokenName_qt_v01(QWidget):
         self.btn_delete_token.setToolTip("Delete the picked token. One token always stays.")
         self.btn_delete_token.clicked.connect(self.on_delete_token)
         buttons.addWidget(self.btn_delete_token)
+
+    def _add_mode_toggle(self, row):
+        """`Dev Mode` 토글 (mode_toggle=True 일 때만). 켜짐 = 개발 화면, 꺼짐 = 배포 화면."""
+        if not self._mode_toggle:
+            return
+        self.btn_dev_mode = QPushButton("Dev Mode")
+        self.btn_dev_mode.setCheckable(True)
+        self.btn_dev_mode.setChecked(self._rules_editable)
+        self.btn_dev_mode.setToolTip(
+            "On  : developer view - Values..., Add Token / Delete Token, Enum rules can change.\n"
+            "Off : the view people get in the shared tool - fixed rules, pick values only.\n"
+            "Only shown in developer mode. Tokens shown now are kept when you switch.")
+        # 테마 qss 에 :checked 가 없어 켜진 게 안 보인다 → 칸 머리와 같은 강조색
+        self.btn_dev_mode.setStyleSheet(
+            "QPushButton:checked { background-color: #d9a441; color: #1e1e1e;"
+            " border: 1px solid #f0c060; font-weight: bold; }")
+        self.btn_dev_mode.toggled.connect(self.set_rules_editable)
+        row.addWidget(self.btn_dev_mode)
+
+    def rules_editable(self):
+        return self._rules_editable
+
+    def set_rules_editable(self, editable):
+        """개발 화면(True) / 배포 화면(False) 으로 바꾼다. 지금 칸 · 저장 기준은 그대로 둔다.
+
+        Enum 칸의 잠금은 칸을 만들 때 정해지므로(콤보에서 Enum 을 빼는 등) 칸을 다시 만든다.
+        """
+        editable = bool(editable)
+        if self.btn_dev_mode is not None and self.btn_dev_mode.isChecked() != editable:
+            self.btn_dev_mode.blockSignals(True)
+            self.btn_dev_mode.setChecked(editable)
+            self.btn_dev_mode.blockSignals(False)
+        if editable == self._rules_editable:
+            return
+        self._rules_editable = editable
+        tokens, saved = self.tokens(), self._saved_tokens
+        picked = self.selected_index()
+        self.load_tokens(tokens)
+        self._saved_tokens = saved      # load_tokens 가 지금 칸을 저장 기준으로 잡으므로 되돌린다
+        if 0 <= picked < len(self.columns):
+            self.select_column(picked)
+        self._after_edit()
+        self._apply_mode_buttons()
+        self._log("{0} : {1} view.".format(
+            self._prefix, "developer" if editable else "release (shared tool)"))
+        self.rulesEditableChanged.emit(editable)
+
+    def _apply_mode_buttons(self):
+        """배포 화면에서는 Add / Delete Token 을 숨긴다 (v01.17)."""
+        for button in (self.btn_add_token, self.btn_delete_token):
+            button.setVisible(self._rules_editable)
 
     def _add_token_area(self, outer):
         # 토큰 칸 줄 - 칸이 늘면 가로 스크롤
@@ -441,7 +574,8 @@ class JUN_mod_tokenName_qt_v01(QWidget):
         self._after_edit()
 
     def _insert_column(self, index, token):
-        column = TokenColumn(token, self.ruleset, self._on_token_changed)
+        column = TokenColumn(token, self.ruleset, self._on_token_changed,
+                             rules_editable=self._rules_editable)
         self.header_group.addButton(column.header)
         self.columns.insert(index, column)
         # 마지막 항목은 stretch 라서 칸은 그 앞에 넣는다
@@ -484,6 +618,10 @@ class JUN_mod_tokenName_qt_v01(QWidget):
         if index < 0:
             self._log("[WARN] {0} : click a token's header to pick the one to delete.".format(
                 self._prefix))
+            return
+        if not self._rules_editable and self.columns[index].is_enum():
+            self._log("[WARN] {0} : Token {1} is a fixed rule and cannot be deleted.".format(
+                self._prefix, index + 1))
             return
         column = self.columns.pop(index)
         self.header_group.removeButton(column.header)

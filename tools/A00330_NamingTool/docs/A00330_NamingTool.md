@@ -91,17 +91,19 @@ data/                      # (git 추적 안 함) Token 프로파일 - token_pro
 > [A00480_FileTool](A00480_FileTool.md) Export > Naming 도 같은 위젯을 쓴다(그쪽은 규칙 `Set's Name` 이 하나 더 있다). 보이는 것 · 동작 · 프로파일 파일은 v01.09 와 같다.
 
 ```
-┌ Objects ───────────────────────────────┐
-│ (Select Base / Add / Del / Up / Down / Sort)
+┌ Objects ──────────────┬ Preview (v01.15) ──────────────────────────────┐
+│ (Select Base / Add /  │ Current │ New name                    │ Status  │
+│  Del / Up / Down /    │ v setGrp│ SIN_n_Set008_..._01_geo     │ OK      │
+│  Sort)                │    acc1 │ SIN_n_Set008_..._02_geo     │ OK      │
 ├ Profile ───────────────────────────────┤
 │ [Default        v] [Save] [New] [Rename] [Delete]
 ├ Tokens ────────────────────────────────┤
 │ [Add Token] [Delete Token]
 │ ┌Token 1┐┌Token 2┐┌Token 3┐┌Token 4──┐┌Token 5──┐  <- 가로 스크롤 ->
 │ │Custom ││Custom ││Custom ││Numbering││Numbering│
-│ │ dyn   ││ asset ││ side  ││Start    ││Start    │
-│ │       ││       ││       ││ [0]     ││ [0]     │
-│ │       ││       ││       ││Pad 0    ││Pad 0    │
+│ │ Text  ││ Text  ││ Text  ││ Start   ││ Start   │   <- 이름 줄 (v01.13 - 모든 칸)
+│ │[dyn  ]││[asset]││[side ]││ [0]     ││ [0]     │   <- 입력칸 - 같은 줄 · 같은 높이
+│ │       ││       ││       ││ Pad 0   ││ Pad 0   │
 │ │       ││       ││       ││ [2]     ││ [2]     │
 │ Preview : dyn_asset_side_00_00 -> next node dyn_asset_side_00_01 | next object dyn_asset_side_01_00
 └────────────────────────────────────────┘
@@ -114,15 +116,54 @@ data/                      # (git 추적 안 함) Token 프로파일 - token_pro
 2. **Profile** 에서 규칙을 고른다. 처음 열면 레거시 규칙 그대로인 **`Default`** 가 만들어져 있다
    (`dyn_asset_side_{번호}_{번호}`, Pad 0 은 둘 다 2).
 3. 필요하면 토큰 칸을 고친다 — **고쳐도 저장되지 않는다**(v01.11~). 기본으로 남기려면 Profile 줄의 **`Save`**. `Preview` 줄에서 결과 이름을 미리 본다.
-4. **Rename** → 각 오브젝트와 그 transform 자손이 토큰을 `_` 로 이은 이름으로 바뀐다. **Undo 한 번**으로 되돌아간다.
+4. 오른쪽 **Preview 표**(v01.15)에서 결과를 본다 — Rename 으로 바뀔 노드 **전부**(Hierarchy 가 켜져 있으면 transform 자손까지)가 계층 그대로
+   `Current` → `New name` 과 `Status` 로 나온다. 리스트나 토큰 칸이 바뀌면 바로 다시 계산한다(씬은 그대로).
+5. **Rename** → 각 오브젝트가 토큰을 `_` 로 이은 이름으로 바뀐다. **Undo 한 번**으로 되돌아간다.
+   Rename 왼쪽 **`Hierarchy`**(v01.18) — **꺼짐(기본, v01.19)** = 리스트의 오브젝트만, 켜짐 = transform 자손까지(v01.17 까지의 동작).
+   Preview 표도 체크를 따라간다.
+   바뀐 뒤 Objects 리스트는 새 이름으로 갱신된다(v01.15).
+
+**Preview 표의 Status** (v01.15) — Quick Rename > Insert 와 같은 규칙.
+
+| Status | 뜻 |
+|---|---|
+| `OK` (초록) | 그대로 바뀐다 |
+| `name taken` (노랑) | 같은 부모 아래에 그 이름이 이미 있다 → 마야가 번호를 붙인다. **이름을 차례로 바꾸는 과정을 흉내 내서** 판정한다 — 곧 다른 이름으로 바뀔 형제의 이름을 받는 건 괜찮고, 이 배치에서 이미 쓴 이름이나 배치 밖 노드의 이름과 겹칠 때만 |
+| `no change` (회색) | 이미 그 이름이다 |
+| `token error` | 토큰 칸 문제(Preview 줄의 `[WARN]` 과 같은 내용) — Rename 이 실행되지 않는다 |
+| `invalid name` / `locked` / `referenced` / `default node` / `gone` | 바꿀 수 없는 노드 — Rename 이 **그 노드만 건너뛰고** 로그에 `[Warning]`. v01.14 까지는 잠긴 노드에서 예외로 멈췄다 |
+
+- 계산은 `core.preview_tokens` — Rename(`rename_tokens`)과 **같은 순서 · 같은 이름**이다(Maya 2024 에서 미리보기 = 실제 결과 대조).
+- 토큰을 칠 때마다 씬을 조회하지 않도록 갱신을 150ms 모은다.
+- **세 칸은 색이 다르다**(v01.16) — Current 파랑 · New name 보라 · Status 회색, 머리글까지. 반투명이라 테마 바탕 위에 얹힌다
+  (어두운 테마는 조금 진하게). 머리글은 테마 qss 가 배경을 덮어쓰므로 테마가 그린 위에 덧칠한다(`TintedHeader`).
 
 **토큰 규칙** (칸 밑의 콤보)
 
 | 규칙 | 입력 | 결과 |
 |------|------|------|
 | `Custom` | 글자 | 적은 글자 그대로. **비워 두면 그 토큰은 건너뛴다**(`a__b` 가 생기지 않는다) |
-| `Enum` (v01.12) | 값 콤보 · `Values...` | **정해진 값 중 고른 하나**. 타이핑하지 않으므로 오타가 없다. 칸 위에 칸 이름(role, 예: `character`)이 보인다. `Values...` 로 칸 이름과 값 목록(쉼표로 구분)을 고친다 |
+| `Enum` (v01.12) | 값 콤보 · `Values...` | **정해진 값 중 고른 하나**. 타이핑하지 않으므로 오타가 없다. 칸 위에 칸 이름(role, 예: `character`)이 보인다. `Values...` 로 칸 이름과 값 목록(쉼표로 구분)을 고친다 — **개발자 모드에서만**(v01.14, 아래) |
 | `Numbering` | `Start`(시작 정수) · `Pad 0`(자리수) | Start 부터 올라가는 번호, Pad 0 자리까지 0 을 채운다(Pad 2 → `00, 01, …`, 자리수를 넘으면 `123` 그대로) |
+
+**개발자 모드 / 배포본** (v01.14) — 정해진 규칙(Enum 칸)을 공유받은 사람이 바꾸지 못하게 한다.
+
+| | 개발자 모드 (`JUN_All/config.py` 의 `DEV_MODE = True`) | 배포본 (릴리즈 저장소) · `DEV_MODE = False` |
+|---|---|---|
+| `Values...` (칸 이름 · 값 목록 편집) | 있음 | **없음** |
+| Enum 칸의 규칙 콤보 | 바꿀 수 있음 | **잠김**(회색) — Custom 으로 바꿔 아무 글자나 넣는 길을 막는다 |
+| `Add Token` / `Delete Token` | 있음 | **없음** (v01.17) — 칸 구성 자체가 정해진 규칙이다 |
+| Enum 칸 삭제 | 됨 | **안 됨** (코드에서도 막는다 — `[WARN] Token N is a fixed rule and cannot be deleted.`) |
+| 다른 칸의 규칙 콤보 | Custom / Enum / Numbering | Custom / Numbering (값 목록을 만들 수 없으니 Enum 을 뺀다) |
+| Enum 값 고르기 · Custom · Numbering · Save | 됨 | 됨 |
+| 다른 탭 (Set Rename · Copy Name · Quick Rename) | 됨 | **보이지 않는다**(v01.19, v01.17 은 회색으로 잠갔다) — Rename > Token 만 |
+| `Dev Mode` 토글 (Tokens 줄 오른쪽) | **있음** — 끄면 배포 화면을 그대로 본다, 다시 켜면 개발 화면 | 없음 |
+
+- 판정은 `app/config/dev_mode.py` — `launch.py` 와 같은 규칙: 툴 폴더 안에 `Framework` 가 동봉돼 있으면 배포본(항상 잠금),
+  아니면 `JUN_All/config.py` 의 `DEV_MODE`(경로로 읽는다 - `import config` 는 다른 툴의 config.py 를 집을 수 있다).
+- 프로파일 json 을 직접 고치는 것까지 막지는 않는다 — 화면에서 규칙을 바꾸는 길만 닫았다.
+- `Dev Mode` 를 바꿔도 지금 칸 · 저장 안 한 변경(Save 상태)은 그대로다. 탭을 숨길 때는 Rename > Token 탭으로 옮긴다.
+- 탭 숨김은 `QTabWidget.setTabVisible`(Qt 5.15+, Maya 2022+). 없는 버전에서는 탭을 빼고(removeTab) 다시 끼운다(insertTab) — 원래 자리 · 툴팁 그대로.
 
 > **팀 이름 규칙(SetXXX)** 은 프로파일 **`Dnable_Set_v001`** 로 짓는다 — 캐릭터 · 좌우 · 파츠 · 오브젝트종류가 Enum 칸이다.
 > 규칙과 쓰는 법은 [A00330_NamingRule_Set.md](A00330_NamingRule_Set.md) (팀 공유용).
@@ -142,6 +183,8 @@ data/                      # (git 추적 안 함) Token 프로파일 - token_pro
 - **`Add Token`** — 고른 칸 **오른쪽**에 빈 `Custom` 칸을 넣고 그 칸을 고른다.
 - **`Delete Token`** — 고른 칸을 지우고 그 자리의 이웃 칸을 고른다. **마지막 한 칸은 지울 수 없다.**
 - 칸이 창 폭보다 많아지면 **가로 스크롤**이 생긴다. 칸 수가 늘어도 창의 최소 폭은 늘지 않는다.
+- **입력칸은 모든 칸에서 같은 줄 · 같은 높이**(v01.13) — 칸마다 입력칸 위에 이름 줄(`Text` / Enum 칸 이름 / `Start` / `Set`)이 있고,
+  높이는 테마를 입힌 글자 칸 · 스핀박스 중 큰 쪽으로 맞춘다. 전에는 Enum 값 콤보가 낮고 Custom 입력칸이 한 줄 위에 붙어 있었다(`ref/ref_02.png`).
 - 칸 폭은 **80px**(v01.08, 처음 120px 의 2/3). 이 폭에 맞추려고 규칙 콤보의 여백을 줄이고 `Start` / `Pad 0` 라벨을 스핀박스 위에 둔다.
 
 **Profile** (A00145 `Attribute > Create` 의 Profile 과 같은 구성)

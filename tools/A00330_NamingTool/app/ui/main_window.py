@@ -84,6 +84,10 @@ class MainWindow(QWidget):
             "Set Rename - search and replace inside set names.")
         main_layout.addWidget(self.tabs, stretch=1)
 
+        # v01.17 : 배포 화면에서는 Rename > Token 탭만 쓴다. Dev Mode 토글(개발자 모드에서만)에도 따른다.
+        self.token_tab.token_widget.rulesEditableChanged.connect(self.apply_release_tabs)
+        self.apply_release_tabs(self.token_tab.token_widget.rules_editable())
+
         # 로그창
         log_group = QGroupBox("Log")
         log_layout = QVBoxLayout(log_group)
@@ -94,6 +98,38 @@ class MainWindow(QWidget):
         footer = QLabel("Copyright (c) Park Ji Hun. All rights reserved.")
         footer.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(footer)
+
+    # ================================================================
+    # 배포 화면 - Rename > Token 탭만 (v01.17, v01.19 숨김)
+    # ================================================================
+
+    def apply_release_tabs(self, editable):
+        """editable=False (배포본 · Dev Mode 꺼짐) 면 Rename > Token 말고 다른 탭을 **숨긴다**.
+
+        v01.17 은 회색으로 잠갔다 - 사용자 요청(v01.19): 탭이 있다는 것 자체가 보이지 않게.
+        숨길 때는 Token 탭으로 옮긴다(다른 탭이 열려 있었으면 그 화면에 갇힌다).
+
+        `QTabWidget.setTabVisible` 은 Qt 5.15+ (Maya 2022+) 에만 있다. 없으면 탭을 빼고(removeTab)
+        다시 끼운다(insertTab) - 그래서 처음 부를 때 페이지 · 제목 · 툴팁 · 자리를 기억해 둔다.
+        """
+        if not hasattr(self, "_release_tabs"):
+            # (탭 위젯, 페이지, 제목, 툴팁, 원래 자리) - Copy Name · Quick Rename · Set Rename
+            self._release_tabs = [
+                (tw, tw.widget(i), tw.tabText(i), tw.tabToolTip(i), i)
+                for tw, i in ((self.tabs, 1), (self.tabs, 2), (self.rename_tabs, 1))]
+        if not editable:
+            self.tabs.setCurrentIndex(0)
+            self.rename_tabs.setCurrentIndex(0)
+        for tab_widget, page, title, tip, index in self._release_tabs:
+            current = tab_widget.indexOf(page)
+            if hasattr(tab_widget, "setTabVisible"):
+                tab_widget.setTabVisible(current, editable)
+                tab_widget.setTabEnabled(current, editable)
+            elif editable and current < 0:
+                tab_widget.insertTab(index, page, title)
+                tab_widget.setTabToolTip(index, tip)
+            elif not editable and current >= 0:
+                tab_widget.removeTab(current)
 
     # ================================================================
     # Tab : Rename  (v01.07) - 하위 탭 Token / Set Rename
