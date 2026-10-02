@@ -1,0 +1,14 @@
+{
+  "free_tokens": true,
+  "tokens": [
+    {
+      "rule": "custom",
+      "text": "Name"
+    },
+    {
+      "rule": "numbering",
+      "start": 1,
+      "pad": 2
+    }
+  ]
+}
