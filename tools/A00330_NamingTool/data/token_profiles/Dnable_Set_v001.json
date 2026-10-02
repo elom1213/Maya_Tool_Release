@@ -2,15 +2,25 @@
   "tokens": [
     {
       "rule": "enum",
-      "role": "character",
-      "values": ["CHN", "DHA", "LUN", "SIN", "TBM"],
-      "value": "CHN"
+      "values": [
+        "CHN",
+        "DHA",
+        "LUN",
+        "SIN",
+        "TBM"
+      ],
+      "value": "CHN",
+      "role": "character"
     },
     {
       "rule": "enum",
-      "role": "side",
-      "values": ["n", "l", "r"],
-      "value": "n"
+      "values": [
+        "n",
+        "l",
+        "r"
+      ],
+      "value": "n",
+      "role": "side"
     },
     {
       "rule": "custom",
@@ -18,20 +28,27 @@
     },
     {
       "rule": "enum",
-      "role": "part",
-      "values": ["Top", "Pants", "Shoes", "Accessory"],
-      "value": "Top"
+      "values": [
+        "Top",
+        "Pants",
+        "Shoes",
+        "Accessory"
+      ],
+      "value": "Top",
+      "role": "part"
     },
     {
-      "rule": "numbering",
-      "start": 1,
-      "pad": 2
+      "rule": "custom",
+      "text": "xx"
     },
     {
       "rule": "enum",
-      "role": "type",
-      "values": ["geo", "grp"],
-      "value": "geo"
+      "values": [
+        "geo",
+        "grp"
+      ],
+      "value": "geo",
+      "role": "type"
     }
   ]
 }
