@@ -1,20 +1,26 @@
 {
   "tokens": [
     {
-      "rule": "custom",
-      "text": "Name"
+      "rule": "enum",
+      "role": "character",
+      "values": ["CHN", "DHA", "LUN", "SIN", "TBM"],
+      "value": "CHN"
     },
     {
-      "rule": "custom",
-      "text": "n"
+      "rule": "enum",
+      "role": "side",
+      "values": ["n", "l", "r"],
+      "value": "n"
     },
     {
       "rule": "custom",
       "text": "SetXXX"
     },
     {
-      "rule": "custom",
-      "text": "Parts"
+      "rule": "enum",
+      "role": "part",
+      "values": ["Top", "Pants", "Shoes", "Accessory"],
+      "value": "Top"
     },
     {
       "rule": "numbering",
@@ -22,8 +28,10 @@
       "pad": 2
     },
     {
-      "rule": "custom",
-      "text": "type"
+      "rule": "enum",
+      "role": "type",
+      "values": ["geo", "grp"],
+      "value": "geo"
     }
   ]
 }
