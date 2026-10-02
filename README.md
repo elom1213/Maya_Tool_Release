@@ -1,7 +1,7 @@
 # Maya Tool Release
 
 Autodesk Maya / 게임 파이프라인용 Python 툴 모음의 **배포(release) 저장소**입니다.
-리깅 · 모델링 · 애니메이션 · 페이셜 작업을 자동화하는 툴들을 셸프 버튼으로 손쉽게 설치해 쓸 수 있습니다.
+리깅 · 모델링 · 네이밍 · 룩뎁 작업을 자동화하는 툴들을 셸프 버튼으로 손쉽게 설치해 쓸 수 있습니다.
 
 - **제작**: Ji Hun Park (Junny)
 - **대상 DCC**: Autodesk Maya (Python 3 / `maya.cmds`, 일부 PySide)
@@ -55,8 +55,8 @@ GitHub 페이지 우측 상단 **`Code` ▸ `Download ZIP`** 로 받아 원하�
 
 ## 3. 툴 설치 (Maya 셸프 버튼 만들기)
 
-1. 사용할 툴 폴더를 엽니다. 예: `tools/A00110_animTool/`
-2. 그 안의 **`__dragDrop_*.py`** 파일(예: `__dragDrop_A00110.py`, 일부 툴은 `__dragDrop.py`)을
+1. 사용할 툴 폴더를 엽니다. 예: `tools/A00330_NamingTool/`
+2. 그 안의 **`__dragDrop_*.py`** 파일(예: `__dragDrop_A00330.py`)을
    **Maya 뷰포트 안으로 드래그&드롭** 합니다.
 3. 현재 활성화된 셸프에 **버튼이 자동 생성**됩니다. 이후엔 그 버튼만 누르면 툴이 실행됩니다.
 
@@ -80,29 +80,19 @@ GitHub 페이지 우측 상단 **`Code` ▸ `Download ZIP`** 로 받아 원하�
 
 ## 5. 수록 툴
 
-각 툴 폴더 안에 안내 문서가 있는 경우 `docs/` 하위에 함께 들어 있습니다(예: `tools/A00110_animTool/docs/`).
+각 툴의 안내 문서는 툴 폴더 안 `docs/` 에 함께 들어 있습니다(예: `tools/A00330_NamingTool/docs/`).
 
 | 툴 | 도메인 | 설명 |
 |----|--------|------|
-| `A00030_quickTool` | 공용 | 자주 쓰는 작업을 모은 퀵 툴 |
-| `A00040_file_exporter` | 파이프라인 | 파일 익스포트 도우미 |
-| `A00050_uvTool` | 모델링 | UV 작업 보조 |
-| `A00110_animTool` | 애니메이션 | SmartLayer 기반 애니메이션/베이크 툴 |
-| `A00170_driverTool` | 리깅 | 드라이버(Set Driven Key) 작업 |
-| `A00180_abSymMesh` | 모델링 | 메시 대칭(symmetry) 처리 |
-| `A00190_FKIK_General_Tool` | 리깅 | FK ↔ IK 전환 |
-| `A00200_CSV_tool` | 페이셜 | ARKit 페이셜 CSV 임포트 |
-| `A00210_FileManager` | 파이프라인 | **(독립 실행)** 씬 파일 버전·작업 기록·브랜치(Lineage) 그래프 관리 + git 동기화 |
+| `A00050_uvTool` | 모델링 | UV 작업 보조 — UV 세트 이름이 규칙과 다른 오브젝트 찾기(Catch Objects) · UV 세트 이름 일괄 변경 |
 | `A00290_BSTool` | 리깅 | blendShape 작업 툴 — Shape Editor 대체 · Base Shape · Mix Targets · Target Order · Bake Delete |
+| `A00330_NamingTool` | 네이밍 | 오브젝트 이름 규칙 툴 — 팀 이름 규칙 프로파일(`Dnable_Set_v001`)의 정해진 값 중에서 골라 이름 짓기 · 결과 미리보기 |
 | `A00470_MaterialTool` | 룩뎁 | 머티리얼 이름 규칙 진단(프로파일 JSON) · 제안 이름으로 일괄 리네임 · 메시 사이 면별 머티리얼 복사 |
 
-> **`A00210_FileManager` 는 다른 툴과 사용법이 다릅니다.** Maya 안에서 도는 셸프 툴이 아니라
-> **독립 실행(standalone) PySide 앱**입니다. 드래그&드롭(3장) 대신 다음처럼 실행합니다.
->
-> - 바로 실행: `tools/A00210_FileManager/launch.py` 실행(파이썬 + `PySide6` 필요).
-> - exe 빌드: `tools/A00210_FileManager/build_exe.bat`(PyInstaller).
-> - 기록 데이터(작업 로그·썸네일·Lineage)는 중앙 git 데이터 리포로 동기화되며, 앱의 **Pull** 한 번이면
->   자동으로 받아집니다. 자세한 사용법은 `tools/A00210_FileManager/docs/A00210_FileManager.md` 참고.
+> 모든 툴은 Maya 안에서 도는 셸프 툴입니다 — 3장처럼 `__dragDrop_*.py` 를 뷰포트에 드래그&드롭해 설치합니다.
+
+> **팀 이름 규칙(SetXXX)**: 코스튬 세트 오브젝트의 이름 규칙과 `A00330_NamingTool` 로 이름 짓는 법은
+> `tools/A00330_NamingTool/docs/A00330_NamingRule_Set.md` 를 참고하세요.
 
 > 각 툴의 자세한 사용법은 해당 툴 폴더의 `docs/*.md` 문서를 참고하세요.
 
