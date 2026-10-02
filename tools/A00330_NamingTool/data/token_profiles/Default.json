@@ -1,0 +1,26 @@
+{
+  "tokens": [
+    {
+      "rule": "custom",
+      "text": "dyn"
+    },
+    {
+      "rule": "custom",
+      "text": "kirring"
+    },
+    {
+      "rule": "custom",
+      "text": "n"
+    },
+    {
+      "rule": "numbering",
+      "start": 1,
+      "pad": 2
+    },
+    {
+      "rule": "numbering",
+      "start": 1,
+      "pad": 2
+    }
+  ]
+}

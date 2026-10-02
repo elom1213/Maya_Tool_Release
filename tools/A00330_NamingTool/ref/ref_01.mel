@@ -1,0 +1,185 @@
+global proc naming_win()/////////////////////////////////////////////////////////////////////////////////////////////
+{
+    string $FF = "";
+    string $MM = "";
+    string $CC = "";
+    string $EE = "";
+        
+    if (`window -q -exists "FB_naming_win"`) 
+    {
+        if (`textField -q -ex "insertname"`) {
+            $FF = `textField -q -tx "insertname"`; }
+        if (`textField -q -ex "newname"`) {
+            $MM = `textField -q -tx "newname"`; }
+        if (`textField -q -ex "index"`) {
+            $CC = `textField -q -tx "index"`; }
+        if (`textField -q -ex "addname"`){
+            $EE = `textField -q -tx "addname"`; }
+    
+        deleteUI "FB_naming_win";
+    }
+    
+    string $naming_window = `window -w 344	-h 59 -title "Naming" "FB_naming_win"`;
+    //-widthHeight 282 58;
+    $FB_naming_win = "test";
+    window -q -wh $naming_window;
+    windowPref -remove $naming_window;
+    //windowPref -le 500 -te 300 -wh 407 60 $naming_window;
+    rowColumnLayout -nc 4 ;
+           button -label "-1" -c "Front_m" ;
+           button -label "All Apply" -c "allaplly" ;
+    rowColumnLayout -nc 4 ;
+           text -l "Front Insert";
+           text -l "Change New";
+           text -l "Start";
+           text -l "Last Add";
+           textField -w 85 -text $FF insertname;
+           textField -w 110 -text $MM newname;
+           textField -w 10 -tx $CC index;
+           textField -w 85 -text $EE addname;
+           button -label "Insert Apply" -c "insertapply" ;
+           button -label "New Apply" -c "newapply" ;
+           text -l "Index";
+           button -label "Add Apply" -c "addapply" ;
+    //       button -label "Close" -command ("deleteUI -window " + $naming_window);
+    setParent ..;
+           button -label "-1" -c "Rear_m" ;
+    showWindow $naming_window;
+    
+    // Resize the main window
+}
+global proc Front_m()
+{
+    string $st[] = `ls -sl -an`;
+    string $null_1[] ;
+    string $null_2[] ;
+    
+    for( $i = 0 ; $i < size($st) ; $i ++)
+    {
+        string $st_[] = `ls -sl -an`;
+        tokenize($st_[$i] , "|" , $null_1);
+        tokenize($null_1[ (size($null_1)) -1 ] , ":" , $null_2);
+        string $LastName = $null_2[ (size($null_2)) -1 ];
+        int $Last_len = size($LastName);
+        string $nn = endString($LastName , ($Last_len -1) );
+        rename( $st_[$i] , $nn );
+    }
+}
+
+
+global proc Rear_m()
+{
+    string $st[] = `ls -sl -an`;
+    string $null_1[] ;
+    string $null_2[] ;
+    
+    for( $i = 0 ; $i < size($st) ; $i ++)
+    {
+        string $st_[] = `ls -sl -an`;
+        tokenize($st_[$i] , "|" , $null_1);
+        tokenize($null_1[ (size($null_1)) -1 ] , ":" , $null_2);
+        string $LastName = $null_2[ (size($null_2)) -1 ];
+        int $Last_len = size($LastName);
+        string $nn = startString($LastName , ($Last_len -1) );
+        rename( $st_[$i] , $nn );
+    }
+}
+
+
+global proc allaplly()
+{
+    newapply;
+    insertapply;
+    addapply;
+}
+
+global proc newapply()
+{
+    string $slct_1[] =`ls -sl`;
+    string $newname = `textField -q -tx newname`;
+//    int $index = `intField -q -v index`;
+    string $str_index = `textField -q -tx index`;
+    int $index = $str_index;
+    string $token_null[];
+    tokenize($newname," ",$token_null);
+    if ($token_null[0] == "")
+    error ("Eerro : Name // 새로운 글자를 반드시 입력해야 합니다  ^_^;;;"+"\n");
+    else
+    {
+        if ($str_index=="")
+        {
+            if(size($slct_1) > 1)
+            {
+                for($i=0,$c=1,$cc=0 ; $i < size($slct_1) ; $i++,$c++ )
+                {
+                    
+                    string $slct_1[] =`ls -sl`;
+                    if ($c < 10)
+                    {
+                        string $Finish_name = `rename $slct_1[$i] ($newname+"0"+$c)`;
+                    }
+                    else
+                    {
+                        string $Finish_name = `rename $slct_1[$i] ($newname+$c)`;
+                    }
+                    print ("Success Change Name"+"\n");
+                }
+            }
+            else
+            {
+                for($i=0,$c=1 ; $i < size($slct_1) ; $i++,$c++ )
+                {
+                    string $slct_1[] =`ls -sl`;
+                    string $Finish_name = `rename $slct_1[$i] ($newname)`;
+                    print ("Success Change Name"+"\n");
+                }
+            }
+        }
+        else
+        {
+            for($i=0,$c=$index , $cc=0 ; $i < size($slct_1) ; $i++,$c++ )
+            {
+                string $slct_1[] =`ls -sl`;
+                if ($c < 10)
+                {
+                    string $Finish_name = `rename $slct_1[$i] ($newname+"0"+$c)`;
+                }
+                else
+                {
+                    string $Finish_name = `rename $slct_1[$i] ($newname+$c)`;
+                }
+                print ("Success Change Name"+"\n");
+            }
+        }
+    }
+}
+
+global proc insertapply()
+{
+    string $slct_1[] =`ls -sl`;
+    string $insertname = `textField -q -tx insertname`; 
+    for($i=0 ; $i < size($slct_1) ; $i++ )
+    {
+        string $slct_1[] =`ls -sl`;
+        string $token_name[];
+        tokenize($slct_1[$i],"|",$token_name);
+        string $FinalName = $token_name[size($token_name)-1]; 
+        rename $slct_1[$i] ($insertname+$FinalName);        
+    }    
+}
+
+global proc addapply()
+{
+    string $slct_1[] =`ls -sl`;
+    string $addname = `textField -q -tx addname`;
+    for($i=0 ; $i < size($slct_1) ; $i++ )
+    {
+        string $slct_1[] =`ls -sl`;
+        string $token_name[];
+        tokenize($slct_1[$i],"|",$token_name);
+        string $FinalName = $token_name[size($token_name)-1]; 
+        rename $slct_1[$i] ($FinalName+$addname);        
+    }
+}///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+naming_win();

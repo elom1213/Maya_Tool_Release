@@ -1,0 +1,29 @@
+{
+  "tokens": [
+    {
+      "rule": "custom",
+      "text": "Name"
+    },
+    {
+      "rule": "custom",
+      "text": "n"
+    },
+    {
+      "rule": "custom",
+      "text": "SetXXX"
+    },
+    {
+      "rule": "custom",
+      "text": "Parts"
+    },
+    {
+      "rule": "numbering",
+      "start": 1,
+      "pad": 2
+    },
+    {
+      "rule": "custom",
+      "text": "type"
+    }
+  ]
+}
